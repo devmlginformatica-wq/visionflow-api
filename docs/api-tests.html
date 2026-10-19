@@ -547,9 +547,9 @@
             return { status: res.status, ok: res.ok, data };
         }
 
-        function addTest(group, name, method, path, passed, status, error = null, response = null) {
+        function addTest(group, name, method, path, passed, status, error = null, response = null, skipped = false) {
             state.results.push({
-                group, name, method, path, passed, status, error, response,
+                group, name, method, path, passed, status, error, response, skipped,
             });
             renderResults();
         }
@@ -612,6 +612,9 @@
 
             // ═══ PEDIDOS ═══
             await testPedidos();
+
+            // ═══ CAMPOS NOVOS (V016) ═══
+            await testCamposNovos();
 
             // ═══ CATÁLOGOS ═══
             await testCatalogos();
@@ -942,6 +945,274 @@
             }
         }
 
+        // ═══ CAMPOS NOVOS (V016) ═══
+
+        async function testCamposNovos() {
+            const group = 'Campos novos (V016)';
+            log('📋 Testando campos novos de cliente, produto e pedido...', 'info');
+
+            let clienteId = null;
+            try {
+                const created = await api('POST', '/clientes', {
+                    nome_razao_social: `Teste V016 ${Date.now()}`,
+                    tipo_pessoa: 'PJ',
+                    data_ultima_visita: null,
+                    anotacao_usuario: '',
+                }, state.token);
+                clienteId = created.data?.data?.id ?? null;
+                if (!created.ok || !clienteId) {
+                    const error = created.data?.error?.message || `HTTP ${created.status}`;
+                    addTest(group, 'POST /clientes (cliente temporário)', 'POST', '/clientes', false, created.status, error);
+                    log(`   ❌ Não foi possível criar cliente temporário → ${created.status}: ${error}`, 'err');
+                } else {
+                    const detailPath = `/clientes/${clienteId}`;
+                    try {
+                        const detail = await api('GET', detailPath, null, state.token);
+                        const customer = detail.data?.data;
+                        const hasFields = customer &&
+                            Object.prototype.hasOwnProperty.call(customer, 'data_ultima_visita') &&
+                            Object.prototype.hasOwnProperty.call(customer, 'anotacao_usuario');
+                        addTest(group, `GET ${detailPath} (campos V016)`, 'GET', detailPath,
+                            detail.ok && hasFields, detail.status,
+                            detail.ok && hasFields ? null : 'Resposta sem data_ultima_visita e/ou anotacao_usuario.');
+                        log(`   ${detail.ok && hasFields ? '✅' : '❌'} GET cliente inclui campos V016 → ${detail.status}`, detail.ok && hasFields ? 'ok' : 'err');
+                    } catch (error) {
+                        addTest(group, `GET ${detailPath} (campos V016)`, 'GET', detailPath, false, 0, error.message);
+                        log(`   ❌ GET cliente V016: ${error.message}`, 'err');
+                    }
+
+                    const visitDate = new Date().toISOString().slice(0, 10);
+                    const note = `Persistência V016 ${Date.now()}`;
+                    try {
+                        const updated = await api('PUT', detailPath, {
+                            nome_razao_social: `Teste V016 ${clienteId}`,
+                            tipo_pessoa: 'PJ',
+                            data_ultima_visita: visitDate,
+                            anotacao_usuario: note,
+                        }, state.token);
+                        addTest(group, `PUT ${detailPath} (campos V016)`, 'PUT', detailPath,
+                            updated.ok, updated.status, updated.ok ? null : updated.data?.error?.message || 'Falha ao atualizar cliente.');
+                        log(`   ${updated.ok ? '✅' : '❌'} PUT campos V016 → ${updated.status}`, updated.ok ? 'ok' : 'err');
+                    } catch (error) {
+                        addTest(group, `PUT ${detailPath} (campos V016)`, 'PUT', detailPath, false, 0, error.message);
+                        log(`   ❌ PUT campos V016: ${error.message}`, 'err');
+                    }
+
+                    try {
+                        const persisted = await api('GET', detailPath, null, state.token);
+                        const customer = persisted.data?.data;
+                        const valuesPersisted = customer?.data_ultima_visita === visitDate &&
+                            customer?.anotacao_usuario === note;
+                        addTest(group, `GET ${detailPath} (persistência V016)`, 'GET', detailPath,
+                            persisted.ok && valuesPersisted, persisted.status,
+                            persisted.ok && valuesPersisted ? null : 'Os valores enviados não foram persistidos/retornados.');
+                        log(`   ${persisted.ok && valuesPersisted ? '✅' : '❌'} GET confirma data_ultima_visita e anotacao_usuario → ${persisted.status}`, persisted.ok && valuesPersisted ? 'ok' : 'err');
+                    } catch (error) {
+                        addTest(group, `GET ${detailPath} (persistência V016)`, 'GET', detailPath, false, 0, error.message);
+                        log(`   ❌ GET persistência V016: ${error.message}`, 'err');
+                    }
+                }
+            } catch (error) {
+                addTest(group, 'POST /clientes (cliente temporário)', 'POST', '/clientes', false, 0, error.message);
+                log(`   ❌ Criar cliente temporário V016: ${error.message}`, 'err');
+            } finally {
+                if (clienteId) {
+                    try {
+                        const removed = await api('DELETE', `/clientes/${clienteId}`, null, state.token);
+                        addTest(group, `DELETE /clientes/${clienteId} (limpeza)`, 'DELETE', `/clientes/${clienteId}`,
+                            removed.ok, removed.status, removed.ok ? null : removed.data?.error?.message || 'Falha ao remover cliente temporário.');
+                        log(`   ${removed.ok ? '✅' : '❌'} Limpeza cliente temporário → ${removed.status}`, removed.ok ? 'ok' : 'err');
+                    } catch (error) {
+                        addTest(group, `DELETE /clientes/${clienteId} (limpeza)`, 'DELETE', `/clientes/${clienteId}`, false, 0, error.message);
+                        log(`   ❌ Limpeza cliente temporário: ${error.message}`, 'err');
+                    }
+                }
+            }
+
+            let products = [];
+            try {
+                const catalog = await api('GET', '/produtos?limit=100', null, state.token);
+                products = catalog.data?.data?.items;
+                if (!catalog.ok || !Array.isArray(products)) {
+                    addTest(group, 'GET /produtos (campos logísticos e preço efetivo)', 'GET', '/produtos',
+                        false, catalog.status, catalog.data?.error?.message || 'Resposta de catálogo inválida.');
+                    addTest(group, 'POST /pedidos (round-trip de código/tabela)', 'POST', '/pedidos',
+                        false, catalog.status, 'Não foi possível consultar produtos para criar o pedido.');
+                    addTest(group, 'GET /pedidos/{id} (round-trip de código/tabela)', 'GET', '/pedidos/{id}',
+                        false, catalog.status, 'Não foi possível consultar produtos para criar o pedido.');
+                    addTest(group, 'POST /pedidos (rejeição de preço acima do efetivo)', 'POST', '/pedidos',
+                        false, catalog.status, 'Não foi possível consultar produtos para validar o preço.');
+                    return;
+                }
+
+                const product = products[0];
+                const hasField = (value, field) => Object.prototype.hasOwnProperty.call(value, field);
+                const priceFieldPresent = value =>
+                    hasField(value, 'sale_price') || hasField(value, 'preco_venda');
+                const tableFieldPresent = value =>
+                    hasField(value, 'price_table_id') || hasField(value, 'tabela_preco_padrao_id');
+                const logisticsFields = [
+                    'peso_liquido', 'peso_bruto', 'cubagem', 'comprimento', 'largura', 'altura_espessura',
+                ];
+                if (!product) {
+                    addTest(group, 'GET /produtos (campos logísticos e preço efetivo)', 'GET', '/produtos',
+                        true, 'SKIP', 'SKIP: catálogo vazio; nenhum produto disponível para inspecionar.', null, true);
+                    log('   ⏭️ Campos de produto ignorados: catálogo sem produtos.', 'dim');
+                    addTest(group, 'POST /pedidos (round-trip de código/tabela)', 'POST', '/pedidos',
+                        true, 'SKIP', 'SKIP: catálogo vazio; sem produto para criar pedido.', null, true);
+                    addTest(group, 'GET /pedidos/{id} (round-trip de código/tabela)', 'GET', '/pedidos/{id}',
+                        true, 'SKIP', 'SKIP: catálogo vazio; sem produto para criar pedido.', null, true);
+                    addTest(group, 'POST /pedidos (rejeição de preço acima do efetivo)', 'POST', '/pedidos',
+                        true, 'SKIP', 'SKIP: catálogo vazio; sem preço efetivo para testar a regra.', null, true);
+                    log('   ⏭️ Testes de pedido ignorados: nenhum produto disponível.', 'dim');
+                    return;
+                }
+                const hasProductFields = product &&
+                    logisticsFields.every(field => hasField(product, field)) &&
+                    priceFieldPresent(product) && tableFieldPresent(product);
+                addTest(group, 'GET /produtos (campos logísticos e preço efetivo)', 'GET', '/produtos',
+                    hasProductFields, catalog.status,
+                    hasProductFields ? null : 'Produto sem uma ou mais chaves logísticas/preço efetivo; valores null são aceitos.');
+                log(`   ${hasProductFields ? '✅' : '❌'} GET /produtos inclui campos logísticos e preço efetivo → ${catalog.status}`, hasProductFields ? 'ok' : 'err');
+            } catch (error) {
+                addTest(group, 'GET /produtos (campos logísticos e preço efetivo)', 'GET', '/produtos', false, 0, error.message);
+                addTest(group, 'POST /pedidos (round-trip de código/tabela)', 'POST', '/pedidos',
+                    false, 0, 'Não foi possível consultar produtos para criar o pedido.');
+                addTest(group, 'GET /pedidos/{id} (round-trip de código/tabela)', 'GET', '/pedidos/{id}',
+                    false, 0, 'Não foi possível consultar produtos para criar o pedido.');
+                addTest(group, 'POST /pedidos (rejeição de preço acima do efetivo)', 'POST', '/pedidos', false, 0, 'Não foi possível consultar produtos para validar o preço.');
+                log(`   ❌ Consultar campos de produto: ${error.message}`, 'err');
+                return;
+            }
+
+            const pricedProduct = products.find(product => {
+                const price = product?.sale_price ?? product?.preco_venda;
+                return typeof price === 'number' && Number.isFinite(price) && price > 0;
+            });
+            if (!pricedProduct) {
+                addTest(group, 'POST /pedidos (rejeição de preço acima do efetivo)', 'POST', '/pedidos',
+                    true, 'SKIP', 'SKIP: catálogo sem produto com sale_price positivo.', null, true);
+                log('   ⏭️ Teste de preço acima do efetivo ignorado: nenhum produto com sale_price positivo no catálogo.', 'dim');
+                addTest(group, 'POST /pedidos (round-trip de código/tabela)', 'POST', '/pedidos',
+                    true, 'SKIP', 'SKIP: catálogo sem produto com sale_price positivo.', null, true);
+                addTest(group, 'GET /pedidos/{id} (round-trip de código/tabela)', 'GET', '/pedidos/{id}',
+                    true, 'SKIP', 'SKIP: catálogo sem produto com sale_price positivo.', null, true);
+                log('   ⏭️ Round-trip do pedido ignorado: nenhum produto com preço efetivo positivo.', 'dim');
+                return;
+            }
+            const orderProduct = pricedProduct;
+
+            let customerId;
+            try {
+                const customerList = await api('GET', '/clientes?limit=1', null, state.token);
+                customerId = customerList.data?.data?.items?.[0]?.id;
+                if (!customerList.ok || !customerId) {
+                    addTest(group, 'POST /pedidos (round-trip de código/tabela)', 'POST', '/pedidos', false,
+                        customerList.status, customerList.data?.error?.message || 'Sem cliente para criar o pedido.');
+                    addTest(group, 'GET /pedidos/{id} (round-trip de código/tabela)', 'GET', '/pedidos/{id}', false,
+                        customerList.status, 'Sem cliente para validar os itens do pedido.');
+                    addTest(group, 'POST /pedidos (rejeição de preço acima do efetivo)', 'POST', '/pedidos', false,
+                        customerList.status, 'Sem cliente para validar a rejeição de preço.');
+                    return;
+                }
+            } catch (error) {
+                for (const [name, method, path] of [
+                    ['POST /pedidos (round-trip de código/tabela)', 'POST', '/pedidos'],
+                    ['GET /pedidos/{id} (round-trip de código/tabela)', 'GET', '/pedidos/{id}'],
+                    ['POST /pedidos (rejeição de preço acima do efetivo)', 'POST', '/pedidos'],
+                ]) {
+                    addTest(group, name, method, path, false, 0, error.message);
+                }
+                return;
+            }
+
+            const selectedPrice = pricedProduct.sale_price ?? pricedProduct.preco_venda;
+            const selectedTableId = orderProduct.price_table_id ?? orderProduct.tabela_preco_padrao_id ?? null;
+            const productCode = orderProduct.codigo_erp ?? null;
+            const requestItem = {
+                produto_id: orderProduct.id,
+                quantidade: 1,
+                preco_venda: selectedPrice,
+                price_table_id: selectedTableId,
+                codigo_cliente: `V016-${Date.now()}`,
+            };
+            if (productCode) {
+                requestItem.product = { id: orderProduct.id, codigo_erp: productCode };
+            }
+
+            let orderId = null;
+            try {
+                const created = await api('POST', '/pedidos', {
+                    tipo: 'pedido',
+                    cliente_id: customerId,
+                    itens: [requestItem],
+                }, state.token);
+                orderId = created.data?.data?.id ?? null;
+                addTest(group, 'POST /pedidos (round-trip de código/tabela)', 'POST', '/pedidos',
+                    created.ok && Boolean(orderId), created.status,
+                    created.ok && orderId ? null : created.data?.error?.message || 'Pedido não foi criado.');
+                log(`   ${created.ok && orderId ? '✅' : '❌'} POST pedido com código do produto e price_table_id → ${created.status}`, created.ok && orderId ? 'ok' : 'err');
+            } catch (error) {
+                addTest(group, 'POST /pedidos (round-trip de código/tabela)', 'POST', '/pedidos', false, 0, error.message);
+                log(`   ❌ POST pedido V016: ${error.message}`, 'err');
+            }
+
+            if (orderId) {
+                try {
+                    const detail = await api('GET', `/pedidos/${orderId}`, null, state.token);
+                    const item = detail.data?.data?.itens?.[0];
+                    const codeMatches = item?.codigo_cliente === requestItem.codigo_cliente;
+                    const tableMatches = (item?.price_table_id ?? null) === selectedTableId;
+                    const productMatches = !productCode || item?.product?.codigo_erp === productCode;
+                    const roundTrip = detail.ok && item && codeMatches && tableMatches && productMatches;
+                    addTest(group, `GET /pedidos/${orderId} (round-trip de código/tabela)`, 'GET',
+                        `/pedidos/${orderId}`, roundTrip, detail.status,
+                        roundTrip ? null : 'codigo_cliente, product.codigo_erp ou price_table_id não corresponde ao enviado.');
+                    log(`   ${roundTrip ? '✅' : '❌'} GET pedido confirma código do produto e price_table_id → ${detail.status}`, roundTrip ? 'ok' : 'err');
+                } catch (error) {
+                    addTest(group, `GET /pedidos/${orderId} (round-trip de código/tabela)`, 'GET',
+                        `/pedidos/${orderId}`, false, 0, error.message);
+                    log(`   ❌ GET pedido V016: ${error.message}`, 'err');
+                } finally {
+                    try {
+                        const removed = await api('DELETE', `/pedidos/${orderId}`, null, state.token);
+                        log(`   ${removed.ok ? '✅' : '⚠️'} Limpeza pedido temporário → ${removed.status}`, removed.ok ? 'dim' : 'err');
+                    } catch (error) {
+                        log(`   ⚠️ Limpeza do pedido temporário falhou: ${error.message}`, 'err');
+                    }
+                }
+            } else {
+                addTest(group, 'GET /pedidos/{id} (round-trip de código/tabela)', 'GET', '/pedidos/{id}',
+                    false, 0, 'Sem pedido criado para consultar o detalhe.');
+            }
+
+            try {
+                const overPriceItem = {
+                    ...requestItem,
+                    preco_venda: selectedPrice + Math.max(1, Math.abs(selectedPrice) * 0.5),
+                    codigo_cliente: `V016-ACIMA-${Date.now()}`,
+                };
+                const rejected = await api('POST', '/pedidos', {
+                    tipo: 'pedido',
+                    cliente_id: customerId,
+                    itens: [overPriceItem],
+                }, state.token);
+                const errorCode = rejected.data?.error?.code;
+                const rejectedAsClientError = rejected.status >= 400 && rejected.status < 500 &&
+                    typeof errorCode === 'string' && errorCode.length > 0;
+                addTest(group, 'POST /pedidos (rejeição de preço acima do efetivo)', 'POST', '/pedidos',
+                    rejectedAsClientError, rejected.status,
+                    rejectedAsClientError ? null : rejected.ok
+                        ? 'A API aceitou preço de venda acima do preço efetivo.'
+                        : `Esperado erro 4xx com código claro; recebido HTTP ${rejected.status}${errorCode ? ` (${errorCode})` : ' sem código de erro'}.`);
+                log(`   ${rejectedAsClientError ? '✅' : '❌'} Rejeição de preço acima do efetivo → HTTP ${rejected.status}${errorCode ? ` (${errorCode})` : ''}`, rejectedAsClientError ? 'ok' : 'err');
+            } catch (error) {
+                addTest(group, 'POST /pedidos (rejeição de preço acima do efetivo)', 'POST', '/pedidos',
+                    false, 0, error.message);
+                log(`   ❌ Validar rejeição de preço acima do efetivo: ${error.message}`, 'err');
+            }
+        }
+
         // ═══ CATÁLOGOS ═══
 
         async function testCatalogos() {
@@ -1083,8 +1354,9 @@
             container.innerHTML = '';
 
             for (const [group, tests] of Object.entries(groups)) {
-                const ok = tests.filter(t => t.passed).length;
-                const total = tests.length;
+                const ok = tests.filter(t => t.passed && !t.skipped).length;
+                const skipped = tests.filter(t => t.skipped).length;
+                const total = tests.length - skipped;
 
                 const div = document.createElement('div');
                 div.className = 'group';
@@ -1094,7 +1366,7 @@
                 groupName.textContent = group;
                 const groupStats = document.createElement('span');
                 groupStats.className = 'group-stats';
-                groupStats.textContent = `${ok}/${total}`;
+                groupStats.textContent = `${ok}/${total}${skipped ? ` (${skipped} ignorado${skipped === 1 ? '' : 's'})` : ''}`;
                 groupHeader.append(groupName, groupStats);
                 div.id = `test-group-${Object.keys(groups).indexOf(group)}`;
                 div.appendChild(groupHeader);
@@ -1103,8 +1375,8 @@
                     const row = document.createElement('div');
                     row.className = 'test';
                     const icon = document.createElement('div');
-                    icon.className = `test-icon ${test.passed ? 'ok' : 'err'}`;
-                    icon.textContent = test.passed ? '✓' : '✗';
+                    icon.className = `test-icon ${test.skipped ? 'skip' : test.passed ? 'ok' : 'err'}`;
+                    icon.textContent = test.skipped ? '–' : test.passed ? '✓' : '✗';
                     const body = document.createElement('div');
                     body.className = 'test-body';
                     const name = document.createElement('div');
@@ -1116,7 +1388,7 @@
                     name.append(badge, document.createTextNode(` ${test.name}`));
                     const meta = document.createElement('div');
                     meta.className = 'test-meta';
-                    meta.textContent = `HTTP ${test.status}`;
+                    meta.textContent = test.skipped ? 'Ignorado' : `HTTP ${test.status}`;
                     body.append(name, meta);
                     if (test.error) {
                         const error = document.createElement('div');
@@ -1152,8 +1424,9 @@
             document.getElementById('runBtn').disabled = false;
             document.getElementById('progress').style.width = '100%';
 
-            const ok = state.results.filter(r => r.passed).length;
-            const err = state.results.filter(r => !r.passed).length;
+            const skipped = state.results.filter(r => r.skipped).length;
+            const ok = state.results.filter(r => r.passed && !r.skipped).length;
+            const err = state.results.filter(r => !r.passed && !r.skipped).length;
             const time = ((Date.now() - state.startTime) / 1000).toFixed(1);
 
             document.getElementById('statTotal').textContent = state.results.length;
@@ -1164,7 +1437,7 @@
 
             log('');
             log(`🏁 Suite concluída em ${time}s`, 'info');
-            log(`   Total: ${state.results.length} | ✅ ${ok} | ❌ ${err}`, ok > 0 && err === 0 ? 'ok' : 'err');
+            log(`   Total: ${state.results.length} | ✅ ${ok} | ❌ ${err} | ⏭️ ${skipped} ignorado(s)`, err === 0 ? 'ok' : 'err');
 
             if (err === 0) {
                 log('🎉 Todos os testes passaram!', 'ok');
@@ -1182,8 +1455,9 @@
         }
 
         function exportReport() {
-            const ok = state.results.filter(r => r.passed).length;
-            const err = state.results.filter(r => !r.passed).length;
+            const ok = state.results.filter(r => r.passed && !r.skipped).length;
+            const err = state.results.filter(r => !r.passed && !r.skipped).length;
+            const skipped = state.results.filter(r => r.skipped).length;
             const time = ((Date.now() - state.startTime) / 1000).toFixed(1);
 
             const report = {
@@ -1192,6 +1466,7 @@
                 total: state.results.length,
                 passou: ok,
                 falhou: err,
+                ignorado: skipped,
                 tempo_segundos: parseFloat(time),
                 testes: state.results,
             };

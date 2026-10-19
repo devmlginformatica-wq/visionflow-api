@@ -12,9 +12,13 @@ func (h *Handler) Routes() http.Handler {
 	r := chi.NewRouter()
 	allowedOrigins := h.corsAllowedOrigins
 	if len(allowedOrigins) == 0 {
-		allowedOrigins = []string{"http://localhost:5173", "http://localhost:3000"}
+		allowedOrigins = []string{
+			"http://localhost:5173",
+			"http://127.0.0.1:5173",
+			"http://localhost:3000",
+			"http://127.0.0.1:3000",
+		}
 	}
-
 	// ─── Middlewares globais ─────────────────────────────
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins,
