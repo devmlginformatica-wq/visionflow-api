@@ -17,6 +17,10 @@ func New(pool *db.Pool) *Service {
 }
 
 func (s *Service) List(ctx context.Context, tenantID, empresaID, userID int, resource, search string, limit, cursor int) ([]map[string]any, string, error) {
+	return s.ListWithPricing(ctx, tenantID, empresaID, userID, resource, search, limit, cursor, nil, nil)
+}
+
+func (s *Service) ListWithPricing(ctx context.Context, tenantID, empresaID, userID int, resource, search string, limit, cursor int, customerID, priceTableID *int) ([]map[string]any, string, error) {
 	if _, ok := queryFor(resource); !ok {
 		return nil, "", fmt.Errorf("catálogo desconhecido: %s", resource)
 	}
@@ -26,7 +30,12 @@ func (s *Service) List(ctx context.Context, tenantID, empresaID, userID int, res
 	}
 	defer session.Rollback(ctx)
 
-	items, err := s.repository.List(ctx, session.Tx, tenantID, empresaID, userID, cursor, limit, resource, search)
+	if resource == "produtos" {
+		if err := s.repository.ValidateProductReferences(ctx, session.Tx, tenantID, empresaID, customerID, priceTableID); err != nil {
+			return nil, "", err
+		}
+	}
+	items, err := s.repository.ListWithPricing(ctx, session.Tx, tenantID, empresaID, userID, cursor, limit, resource, search, customerID, priceTableID)
 	if err != nil {
 		return nil, "", err
 	}

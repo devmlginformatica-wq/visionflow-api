@@ -242,8 +242,24 @@ func (h *Handler) Catalogo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resource := strings.TrimPrefix(r.URL.Path, "/")
-	items, next, err := h.Service.Catalogo(r.Context(), tenantID, empresaID,
-		userID, resource, r.URL.Query().Get("busca"), limit, cursor)
+	var clienteID, tabelaPrecoID *int
+	if resource == "produtos" {
+		for _, filter := range []struct {
+			name string
+			dest **int
+		}{{"cliente_id", &clienteID}, {"tabela_preco_id", &tabelaPrecoID}} {
+			if value := r.URL.Query().Get(filter.name); value != "" {
+				id, err := requestID(value)
+				if err != nil {
+					bad(w, http.StatusBadRequest, "REQUISICAO_INVALIDA", filter.name+" deve ser um ID positivo.")
+					return
+				}
+				*filter.dest = &id
+			}
+		}
+	}
+	items, next, err := h.Service.CatalogoComPreco(r.Context(), tenantID, empresaID,
+		userID, resource, r.URL.Query().Get("busca"), limit, cursor, clienteID, tabelaPrecoID)
 	if err != nil {
 		writeServiceError(w, err, "Não foi possível consultar o catálogo.")
 		return

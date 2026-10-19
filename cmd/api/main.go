@@ -59,6 +59,8 @@ func run() error {
 	//    Service e handlers compartilham o pool PostgreSQL.
 	svc := service.New(pool)
 	handler := httpapi.NewHandler(svc, pool, cfg.JWTSecret, cfg.CORSAllowedOrigins)
+	handler.AppEnv = cfg.AppEnv
+	handler.SQLConsoleEnabled = cfg.SQLConsoleEnabled
 
 	// 6. Router
 	router := handler.Routes()

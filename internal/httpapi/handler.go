@@ -24,6 +24,8 @@ type Handler struct {
 	Service            *service.Service
 	Pool               *db.Pool
 	JWTSecret          string
+	AppEnv             string
+	SQLConsoleEnabled  bool
 	corsAllowedOrigins []string
 }
 
@@ -126,8 +128,8 @@ func (h *Handler) Clientes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := r.URL.Query().Get("status")
-	if status != "" && status != "ativo" && status != "inativo" && status != "prospect" {
-		bad(w, 400, "REQUISICAO_INVALIDA", "status deve ser ativo, inativo ou prospect.")
+	if status != "" && status != "ativo" && status != "inativo" && status != "prospect" && status != "bloqueado" {
+		bad(w, 400, "REQUISICAO_INVALIDA", "status deve ser ativo, inativo, prospect ou bloqueado.")
 		return
 	}
 	items, next, err := h.Service.ClientesAPI(r.Context(), tenantID, empresaID,

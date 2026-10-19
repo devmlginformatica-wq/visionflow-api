@@ -307,7 +307,7 @@ func pedidoDetalhe(ctx context.Context, tx pgx.Tx, tenantID, empresaID, id int) 
 		if !exists || id == nil {
 			order[reference.key] = nil
 		} else if reference.name != "" {
-			order[reference.key] = map[string]any{"id": id, "nome": order[reference.name]}
+			order[reference.key] = map[string]any{"id": id, "nome": order[reference.name], "nome_razao": order[reference.name]}
 		} else {
 			order[reference.key] = map[string]any{"id": id, "descricao": order[reference.description]}
 		}
@@ -345,6 +345,11 @@ func pedidoItens(ctx context.Context, tx pgx.Tx, codigoErpPedido string) ([]map[
 		       COALESCE(i.peso_bruto,0)::double precision AS product_peso_bruto,
 		       COALESCE(i.cubagem_embalagem,0)::double precision AS product_cubagem,
 		       COALESCE(i.qtde_volumes_embalagem,0)::double precision AS product_volumes,
+		       COALESCE(i.comprimento_embalagem,0)::double precision AS product_comprimento,
+		       COALESCE(i.largura_embalagem,0)::double precision AS product_largura,
+		       COALESCE(i.altura_embalagem,0)::double precision AS product_altura,
+		       COALESCE(i.permite_venda_sem_estoque,false) AS product_permite_sem_estoque,
+		       pi.codigo_cliente,
 		       pi.codigo_erp_tabela_preco,
 		       pi.preco_venda_praticado_digitado::double precision AS sale_price,
 		       pi.preco_venda_original_sugerido AS original_price,
@@ -396,10 +401,15 @@ func pedidoItens(ctx context.Context, tx pgx.Tx, codigoErpPedido string) ([]map[
 			"marca": row["product_marca"], "unidade": row["product_unidade"],
 			"preco_venda": row["product_preco_venda"], "stock": row["product_stock"],
 			"peso_liquido": row["product_peso_liquido"], "peso_bruto": row["product_peso_bruto"],
-			"_cubagem": row["product_cubagem"], "_volumes": row["product_volumes"],
+			"cubagem": row["product_cubagem"], "comprimento": row["product_comprimento"],
+			"largura": row["product_largura"], "altura_espessura": row["product_altura"],
+			"qtde_embalagem":            row["product_volumes"],
+			"permite_venda_sem_estoque": row["product_permite_sem_estoque"],
+			"_cubagem":                  row["product_cubagem"], "_volumes": row["product_volumes"],
 		}
 		item := map[string]any{
 			"id": row["id"], "sequence": parseSequence(row["sequence"]), "product": product,
+			"codigo_cliente": row["codigo_cliente"],
 			"price_table_id": row["price_table_id"], "price_table_name": row["price_table_name"],
 			"quantidade_informada": row["quantidade_informada"], "sale_price": row["sale_price"],
 			"original_price": row["original_price"], "valor_desconto_comercial": row["valor_desconto_comercial"],
@@ -636,7 +646,7 @@ func (s *Service) CriarPedido(ctx context.Context, tenantID, empresaID int, inpu
 		if err != nil {
 			return fmt.Errorf("criar pedido: %w", err)
 		}
-		if err := insertPedidoItems(ctx, tx, tenantID, empresaID, orderERP, input.Itens, orderDelivery); err != nil {
+		if err := insertPedidoItems(ctx, tx, tenantID, empresaID, orderERP, customerCode, emissao, input.Itens, orderDelivery); err != nil {
 			return err
 		}
 		result, err = pedidoDetalhe(ctx, tx, tenantID, empresaID, orderID)
@@ -734,7 +744,7 @@ func (s *Service) AtualizarPedido(ctx context.Context, tenantID, empresaID, id i
 			tenantID, empresaID, orderERP); err != nil {
 			return fmt.Errorf("substituir itens do pedido: %w", err)
 		}
-		if err := insertPedidoItems(ctx, tx, tenantID, empresaID, orderERP, input.Itens, orderDelivery); err != nil {
+		if err := insertPedidoItems(ctx, tx, tenantID, empresaID, orderERP, customerCode, emission, input.Itens, orderDelivery); err != nil {
 			return err
 		}
 		result, err = pedidoDetalhe(ctx, tx, tenantID, empresaID, id)
@@ -743,7 +753,7 @@ func (s *Service) AtualizarPedido(ctx context.Context, tenantID, empresaID, id i
 	return result, err
 }
 
-func insertPedidoItems(ctx context.Context, tx pgx.Tx, tenantID, empresaID int, orderERP string, items []models.PedidoItemInput, orderDelivery *time.Time) error {
+func insertPedidoItems(ctx context.Context, tx pgx.Tx, tenantID, empresaID int, orderERP string, customerERP *string, emission time.Time, items []models.PedidoItemInput, orderDelivery *time.Time) error {
 	sequences := make(map[int]struct{}, len(items))
 	for index, item := range items {
 		if item.Sequence <= 0 || item.QuantidadeInformada <= 0 ||
@@ -782,6 +792,65 @@ func insertPedidoItems(ctx context.Context, tx pgx.Tx, tenantID, empresaID int, 
 			}
 			return fmt.Errorf("tabela de preço não encontrada: %w", err)
 		}
+		if priceCode == nil {
+			var defaultCode string
+			err := tx.QueryRow(ctx, `
+				SELECT tp.codigo_erp
+				FROM tabela_preco tp
+				JOIN item i ON i.cod_tenant=tp.cod_tenant AND i.cod_empresa=tp.cod_empresa
+				  AND i.codigo_erp=$3
+				LEFT JOIN cliente c ON c.cod_tenant=tp.cod_tenant AND c.cod_empresa=tp.cod_empresa
+				  AND c.codigo_erp=$4 AND c.deletado_em IS NULL
+				WHERE tp.cod_tenant=$1 AND tp.cod_empresa=$2 AND COALESCE(tp.ativo,true)
+				  AND tp.codigo_erp=COALESCE(NULLIF(c.codigo_erp_tabela_preco,''),
+				    i.codigo_integracao_tabela_preco)
+				LIMIT 1`, tenantID, empresaID, productCode, customerERP).Scan(&defaultCode)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("resolver tabela de preço do item: %w", err)
+			}
+			if err == nil {
+				priceCode = &defaultCode
+			}
+		}
+		var officialPrice sql.NullFloat64
+		if priceCode != nil {
+			err = tx.QueryRow(ctx, `
+				SELECT COALESCE(
+				  CASE WHEN tpi.preco_venda_promocao>0
+				    AND (tpi.validade_inicial_promocao IS NULL OR tpi.validade_inicial_promocao<=$4::date)
+				    AND (tpi.validade_final_promocao IS NULL OR tpi.validade_final_promocao>=$4::date)
+				    THEN tpi.preco_venda_promocao END,
+				  tpi.preco_venda)
+				FROM tabela_preco_item tpi
+				WHERE tpi.cod_tenant=$1 AND tpi.cod_empresa=$2
+				  AND tpi.codigo_erp_tabela_preco=$3 AND tpi.codigo_erp_item=$5
+				  AND tpi.quantidade_inicial<=$6
+				  AND (tpi.quantidade_final IS NULL OR tpi.quantidade_final>=$6)
+				  AND (tpi.validade_inicial IS NULL OR tpi.validade_inicial<=$4::date)
+				  AND (tpi.validade_final IS NULL OR tpi.validade_final>=$4::date)
+				ORDER BY tpi.validade_inicial DESC NULLS LAST,tpi.codigo DESC LIMIT 1`,
+				tenantID, empresaID, *priceCode, emission, productCode, item.QuantidadeInformada).Scan(&officialPrice)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return InvalidInput(fmt.Sprintf("item %d: não há preço vigente na tabela selecionada", index+1))
+			}
+			if err != nil {
+				return fmt.Errorf("validar preço do item: %w", err)
+			}
+		} else {
+			err = tx.QueryRow(ctx, `SELECT preco_venda FROM item
+				WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo_erp=$3 AND COALESCE(ativo,true)`,
+				tenantID, empresaID, productCode).Scan(&officialPrice)
+			if err != nil {
+				return fmt.Errorf("consultar preço base do item: %w", err)
+			}
+		}
+		if !officialPrice.Valid {
+			return InvalidInput(fmt.Sprintf("item %d: produto sem preço efetivo cadastrado", index+1))
+		}
+		if item.SalePrice > officialPrice.Float64 {
+			return InvalidInput(fmt.Sprintf("item %d: preço de venda excede o preço efetivo do catálogo", index+1))
+		}
+		item.OriginalPrice = officialPrice.Float64
 		total := item.QuantidadeInformada*item.SalePrice - item.ValorDescontoComercial
 		if total < 0 {
 			return InvalidInput(fmt.Sprintf("item %d: desconto excede o valor bruto", index+1))
@@ -794,16 +863,19 @@ func insertPedidoItems(ctx context.Context, tx pgx.Tx, tenantID, empresaID int, 
 			}
 			dataEntrega = data
 		}
+		if item.CodigoCliente != nil && len([]rune(*item.CodigoCliente)) > 50 {
+			return InvalidInput(fmt.Sprintf("item %d: codigo_cliente excede 50 caracteres", index+1))
+		}
 		_, err = tx.Exec(ctx, `
 			INSERT INTO pedido_item (
 				cod_tenant,cod_empresa,codigo_erp_pedido,codigo_erp_item_pedido,
 				codigo_erp_produto,codigo_erp_tabela_preco,preco_venda_original_sugerido,
 				preco_venda_praticado_digitado,quantidade_informada,
-				valor_desconto_comercial,valor_total_produtos_liquido,data_entrega,observacao_item
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+				valor_desconto_comercial,valor_total_produtos_liquido,data_entrega,observacao_item,codigo_cliente
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 			tenantID, empresaID, orderERP, strconv.Itoa(item.Sequence), productCode,
 			priceCode, item.OriginalPrice, item.SalePrice, item.QuantidadeInformada,
-			item.ValorDescontoComercial, total, dataEntrega, item.ObservacaoItem)
+			item.ValorDescontoComercial, total, dataEntrega, item.ObservacaoItem, item.CodigoCliente)
 		if err != nil {
 			return fmt.Errorf("salvar item %d: %w", index+1, err)
 		}

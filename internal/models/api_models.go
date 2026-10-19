@@ -1,28 +1,34 @@
 package models
 
 type ClienteCreate struct {
-	NomeRazaoSocial         string  `json:"nome_razao_social"`
-	NomeFantasia            string  `json:"nome_fantasia"`
-	CNPJCPF                 string  `json:"cnpj_cpf"`
-	InscricaoEstadualRG     string  `json:"inscricao_estadual_rg"`
-	TipoPessoa              string  `json:"tipo_pessoa"`
-	Prospect                bool    `json:"prospect"`
-	Telefone1               string  `json:"telefone1"`
-	Telefone2               string  `json:"telefone2"`
-	Celular                 string  `json:"celular"`
-	NomeContatoComprador    string  `json:"nome_contato_comprador"`
-	EmailContatoComprador   string  `json:"email_contato_comprador"`
-	NomeContatoFaturamento  string  `json:"nome_contato_faturamento"`
-	EmailContatoFaturamento string  `json:"email_contato_faturamento"`
-	LimiteCreditoTotal      float64 `json:"limite_credito_total"`
-	AnotacaoERP             string  `json:"anotacao_erp"`
-	CEP                     string  `json:"cep"`
-	Logradouro              string  `json:"logradouro"`
-	NumeroEndereco          string  `json:"numero_endereco"`
-	Complemento             string  `json:"complemento"`
-	Bairro                  string  `json:"bairro"`
-	Cidade                  string  `json:"cidade"`
-	Estado                  string  `json:"estado"`
+	NomeRazaoSocial           string  `json:"nome_razao_social"`
+	NomeFantasia              string  `json:"nome_fantasia"`
+	CNPJCPF                   string  `json:"cnpj_cpf"`
+	InscricaoEstadualRG       string  `json:"inscricao_estadual_rg"`
+	TipoPessoa                string  `json:"tipo_pessoa"`
+	Prospect                  bool    `json:"prospect"`
+	Telefone1                 string  `json:"telefone1"`
+	Telefone2                 string  `json:"telefone2"`
+	Celular                   string  `json:"celular"`
+	NomeContatoComprador      string  `json:"nome_contato_comprador"`
+	EmailContatoComprador     string  `json:"email_contato_comprador"`
+	NomeContatoFaturamento    string  `json:"nome_contato_faturamento"`
+	EmailContatoFaturamento   string  `json:"email_contato_faturamento"`
+	LimiteCreditoTotal        float64 `json:"limite_credito_total"`
+	AnotacaoERP               string  `json:"anotacao_erp"`
+	CEP                       string  `json:"cep"`
+	Logradouro                string  `json:"logradouro"`
+	NumeroEndereco            string  `json:"numero_endereco"`
+	Complemento               string  `json:"complemento"`
+	Bairro                    string  `json:"bairro"`
+	Cidade                    string  `json:"cidade"`
+	Estado                    string  `json:"estado"`
+	TransportadoraPadraoID    *int    `json:"transportadora_padrao_id"`
+	CondicaoPagamentoPadraoID *int    `json:"condicao_pagamento_padrao_id"`
+	FormaPagamentoPadraoID    *int    `json:"forma_pagamento_padrao_id"`
+	TabelaPrecoPadraoID       *int    `json:"tabela_preco_padrao_id"`
+	DataUltimaVisita          *string `json:"data_ultima_visita"`
+	AnotacaoUsuario           string  `json:"anotacao_usuario"`
 }
 
 type EnderecoCreate struct {
@@ -89,6 +95,7 @@ type PedidoItemInput struct {
 	ValorTotalProdutosLiquido *float64     `json:"valor_total_produtos_liquido"`
 	DataEntrega               *string      `json:"data_entrega"`
 	ObservacaoItem            *string      `json:"observacao_item"`
+	CodigoCliente             *string      `json:"codigo_cliente"`
 	ProdutoID                 int          `json:"produto_id"`
 	Quantidade                float64      `json:"quantidade"`
 	PrecoVenda                float64      `json:"preco_venda"`

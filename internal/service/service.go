@@ -56,6 +56,14 @@ func (s *Service) Catalogo(ctx context.Context, tenantID, empresaID, userID int,
 	return s.catalogo.List(ctx, tenantID, empresaID, userID, recurso, busca, limit, cursor)
 }
 
+func (s *Service) CatalogoComPreco(ctx context.Context, tenantID, empresaID, userID int, recurso, busca string, limit, cursor int, clienteID, tabelaPrecoID *int) ([]map[string]any, string, error) {
+	items, next, err := s.catalogo.ListWithPricing(ctx, tenantID, empresaID, userID, recurso, busca, limit, cursor, clienteID, tabelaPrecoID)
+	if errors.Is(err, catalogo.ErrInvalidFilter) {
+		return nil, "", InvalidInput("cliente_id ou tabela_preco_id não existe ou está inativo nesta empresa")
+	}
+	return items, next, err
+}
+
 // ─── AUTH ───────────────────────────────────────────────────
 
 func (s *Service) Login(ctx context.Context, email, senha string) (models.Usuario, error) {

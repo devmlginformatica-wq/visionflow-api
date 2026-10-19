@@ -40,6 +40,7 @@ func (h *Handler) Routes() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(h.Auth)
 		r.Post("/auth/logout", h.Logout)
+		r.Post("/dev/sql", h.ExecuteDevelopmentSQL)
 
 		// Home
 		r.Get("/home/indicadores", h.HomeIndicadores)

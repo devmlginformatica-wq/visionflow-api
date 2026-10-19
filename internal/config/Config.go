@@ -14,7 +14,9 @@ import (
 
 // Config agrega toda a configuração da aplicação.
 type Config struct {
-	Port string
+	Port              string
+	AppEnv            string
+	SQLConsoleEnabled bool
 
 	// PostgreSQL
 	DBHost            string
@@ -43,6 +45,8 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		Port:               getEnv("PORT", "8080"),
+		AppEnv:             getEnv("APP_ENV", "production"),
+		SQLConsoleEnabled:  false,
 		DBHost:             getEnv("DB_HOST", "localhost"),
 		DBPort:             getEnv("DB_PORT", "5432"),
 		DBUser:             getEnv("DB_USER", ""),
@@ -55,6 +59,13 @@ func Load() (*Config, error) {
 		JWTSecret:          getEnv("JWT_SECRET", ""),
 		JWTExpiration:      getEnvDuration("JWT_EXPIRATION", 8*time.Hour),
 		CORSAllowedOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
+	}
+	if value := os.Getenv("SQL_CONSOLE_ENABLED"); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return nil, fmt.Errorf("SQL_CONSOLE_ENABLED deve ser true ou false")
+		}
+		cfg.SQLConsoleEnabled = enabled
 	}
 
 	if err := cfg.validate(); err != nil {

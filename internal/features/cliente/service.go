@@ -3,6 +3,7 @@ package cliente
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/mail"
@@ -89,7 +90,14 @@ func (s *Service) Create(ctx context.Context, tenantID, empresaID int, input mod
 		if duplicate {
 			return apperrors.ErrDuplicateResource
 		}
-		result, err = s.repository.Create(ctx, tx, tenantID, empresaID, input)
+		codes, err := s.repository.resolveDefaultCodes(ctx, tx, tenantID, empresaID, input)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return apperrors.InvalidInput("um dos IDs de padrão comercial não existe ou está inativo")
+		}
+		if err != nil {
+			return err
+		}
+		result, err = s.repository.Create(ctx, tx, tenantID, empresaID, input, codes)
 		return err
 	})
 	return result, err
@@ -108,7 +116,14 @@ func (s *Service) Update(ctx context.Context, tenantID, empresaID, id int, input
 		if duplicate {
 			return apperrors.ErrDuplicateResource
 		}
-		result, err = s.repository.Update(ctx, tx, tenantID, empresaID, id, input)
+		codes, err := s.repository.resolveDefaultCodes(ctx, tx, tenantID, empresaID, input)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return apperrors.InvalidInput("um dos IDs de padrão comercial não existe ou está inativo")
+		}
+		if err != nil {
+			return err
+		}
+		result, err = s.repository.Update(ctx, tx, tenantID, empresaID, id, input, codes)
 		return err
 	})
 	return result, err
@@ -196,6 +211,19 @@ func validCliente(input models.ClienteCreate) error {
 	}
 	if input.TipoPessoa != "PF" && input.TipoPessoa != "PJ" {
 		return apperrors.InvalidInput("tipo_pessoa deve ser PF ou PJ")
+	}
+	for _, reference := range []*int{
+		input.TransportadoraPadraoID, input.CondicaoPagamentoPadraoID,
+		input.FormaPagamentoPadraoID, input.TabelaPrecoPadraoID,
+	} {
+		if reference != nil && *reference <= 0 {
+			return apperrors.InvalidInput("IDs de padrão comercial devem ser positivos")
+		}
+	}
+	if input.DataUltimaVisita != nil && *input.DataUltimaVisita != "" {
+		if _, err := time.Parse("2006-01-02", *input.DataUltimaVisita); err != nil {
+			return apperrors.InvalidInput("data_ultima_visita deve estar no formato YYYY-MM-DD")
+		}
 	}
 	if strings.TrimSpace(input.CNPJCPF) != "" {
 		document := digitsOnly(input.CNPJCPF)

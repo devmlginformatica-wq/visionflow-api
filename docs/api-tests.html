@@ -260,13 +260,55 @@
         .badge.post { background: #238636; color: #fff; }
         .badge.put { background: #9e6a03; color: #fff; }
         .badge.delete { background: #da3633; color: #fff; }
+
+        .tab-nav { display: flex; gap: 8px; margin: 0 0 16px; }
+        .tab-button { background: #21262d; border: 1px solid #30363d; }
+        .tab-button.active { background: #1f6feb; border-color: #1f6feb; }
+        .test-menu { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+        .test-menu button { padding: 5px 10px; font-size: 12px; }
+        .panel.hidden { display: none; }
+        .auth-status { color: #8b949e; font-size: 12px; }
+        .sql-panel, .sql-results {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .sql-panel h2 { color: #f0f6fc; font-size: 18px; margin-bottom: 8px; }
+        .sql-note, .sql-error { font-size: 13px; margin-bottom: 12px; }
+        .sql-note { color: #d29922; }
+        .sql-error { color: #f85149; white-space: pre-wrap; }
+        textarea {
+            width: 100%;
+            min-height: 180px;
+            resize: vertical;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: #c9d1d9;
+            padding: 12px;
+            font: 13px/1.5 monospace;
+            margin-bottom: 12px;
+        }
+        textarea:focus { outline: none; border-color: #58a6ff; }
+        .sql-table-wrap { overflow: auto; max-height: 480px; }
+        .sql-table { width: 100%; border-collapse: collapse; font: 12px monospace; }
+        .sql-table th, .sql-table td {
+            border: 1px solid #30363d;
+            padding: 8px;
+            text-align: left;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+        .sql-table th { position: sticky; top: 0; background: #1c2128; color: #f0f6fc; }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
             <h1>🧪 VisionFlow API — Testes Automatizados</h1>
-            <div class="subtitle">Suite completa de validação end-to-end</div>
+            <div class="subtitle">Testes de endpoints e console SQL de desenvolvimento com contexto RLS por execução<br>Sirva esta página em uma origem permitida por CORS (por exemplo, localhost:5173 ou :3000); o navegador pode bloquear chamadas quando aberta via file://.</div>
         </header>
 
         <div class="controls">
@@ -276,16 +318,29 @@
             </label>
             <label>
                 Email:
-                <input type="text" id="email" value="admin@epare.com.br">
+                <input type="text" id="email" autocomplete="username" placeholder="usuario@empresa.com.br">
             </label>
             <label>
                 Senha:
-                <input type="password" id="password" value="123456">
+                <input type="password" id="password" autocomplete="current-password" placeholder="Senha">
             </label>
+            <button id="loginBtn" onclick="authenticate()">Entrar</button>
+            <span class="auth-status" id="authStatus">Não autenticado</span>
+        </div>
+
+        <nav class="tab-nav" aria-label="Áreas de teste">
+            <button class="tab-button active" id="suiteTab" onclick="switchPanel('suitePanel', this)">Testes da API</button>
+            <button class="tab-button" id="sqlTab" onclick="switchPanel('sqlPanel', this)">Console SQL (desenvolvimento)</button>
+        </nav>
+
+        <section class="panel" id="suitePanel">
+        <div class="controls">
             <button id="runBtn" onclick="runAll()">▶ Rodar todos os testes</button>
             <button class="secondary" onclick="clearResults()">Limpar</button>
             <button class="secondary" onclick="exportReport()">📄 Exportar</button>
         </div>
+
+        <nav id="testMenu" class="test-menu" aria-label="Menu de grupos de testes"></nav>
 
         <div class="progress-bar">
             <div class="progress-fill" id="progress"></div>
@@ -313,6 +368,20 @@
         <div id="results"></div>
 
         <div class="log" id="log" style="display: none;"></div>
+        </section>
+
+        <section class="panel hidden" id="sqlPanel">
+            <div class="sql-panel">
+                <h2>Console SQL autenticado</h2>
+                <p class="sql-note">Disponível apenas com APP_ENV=development e SQL_CONSOLE_ENABLED=true. Exige usuário admin e role PostgreSQL sem SUPERUSER/BYPASSRLS nem propriedade de tabelas com RLS sem FORCE ROW LEVEL SECURITY. Cada execução usa uma transação isolada com o tenant/empresa do login; o navegador não mantém uma conexão física aberta. Saída limitada a 500 linhas e 1 MiB.</p>
+                <label for="sqlInput">Uma instrução SQL por execução (SELECT/WITH/INSERT/UPDATE/DELETE)</label>
+                <textarea id="sqlInput" spellcheck="false" placeholder="SELECT codigo, nome_razao_social FROM cliente ORDER BY codigo LIMIT 20"></textarea>
+                <button id="sqlRunBtn" onclick="executeSQL()">▶ Executar SQL</button>
+                <button class="secondary" onclick="clearSQLResults()">Limpar resultado</button>
+                <div class="sql-error" id="sqlError" role="alert"></div>
+            </div>
+            <div class="sql-results" id="sqlResults" aria-live="polite"></div>
+        </section>
     </div>
 
     <script>
@@ -323,7 +392,6 @@
         const state = {
             running: false,
             token: null,
-            tokenUser3: null,
             results: [],
             startTime: 0,
             clientId: null,
@@ -349,6 +417,109 @@
 
         function apiUrl() {
             return document.getElementById('apiUrl').value.replace(/\/$/, '');
+        }
+
+        function switchPanel(panelId, button) {
+            document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('hidden', panel.id !== panelId));
+            document.querySelectorAll('.tab-button').forEach(tab => tab.classList.toggle('active', tab === button));
+        }
+
+        async function authenticate() {
+            const loginButton = document.getElementById('loginBtn');
+            const status = document.getElementById('authStatus');
+            loginButton.disabled = true;
+            status.textContent = 'Autenticando...';
+            try {
+                const { ok, status: httpStatus, data } = await api('POST', '/auth/login', {
+                    email: document.getElementById('email').value.trim(),
+                    senha: document.getElementById('password').value,
+                });
+                const token = data?.data?.usuario?.token;
+                if (!ok || !token) {
+                    state.token = null;
+                    status.textContent = data?.error?.message || `Falha no login (HTTP ${httpStatus})`;
+                    return;
+                }
+                state.token = token;
+                const user = data.data.usuario;
+                status.textContent = `Autenticado${user.nome ? `: ${user.nome}` : ''}`;
+            } catch (error) {
+                state.token = null;
+                status.textContent = `Erro de conexão: ${error.message}`;
+            } finally {
+                loginButton.disabled = false;
+            }
+        }
+
+        async function executeSQL() {
+            const button = document.getElementById('sqlRunBtn');
+            const errorEl = document.getElementById('sqlError');
+            errorEl.textContent = '';
+            document.getElementById('sqlResults').replaceChildren();
+            if (!state.token) {
+                errorEl.textContent = 'Entre com um usuário administrador antes de executar SQL.';
+                return;
+            }
+            button.disabled = true;
+            try {
+                const response = await api('POST', '/dev/sql', {
+                    sql: document.getElementById('sqlInput').value,
+                }, state.token);
+                if (!response.ok) {
+                    errorEl.textContent = response.data?.error?.message || `Falha ao executar SQL (HTTP ${response.status})`;
+                    return;
+                }
+                renderSQLResult(response.data?.data);
+            } catch (error) {
+                errorEl.textContent = `Erro de conexão: ${error.message}`;
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        function renderSQLResult(result) {
+            const container = document.getElementById('sqlResults');
+            if (!result || !Array.isArray(result.columns) || !Array.isArray(result.rows)) {
+                document.getElementById('sqlError').textContent = 'A API retornou um formato de resultado inválido.';
+                return;
+            }
+            const summary = document.createElement('p');
+            summary.className = 'test-meta';
+            summary.textContent = `${result.command || 'SQL'} — ${result.row_count ?? result.rows.length} linha(s)${result.truncated ? ' (resultado truncado no limite da API)' : ''}`;
+            container.appendChild(summary);
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'sql-table-wrap';
+            const table = document.createElement('table');
+            table.className = 'sql-table';
+            const head = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            for (const column of result.columns) {
+                const th = document.createElement('th');
+                th.textContent = String(column);
+                headerRow.appendChild(th);
+            }
+            head.appendChild(headerRow);
+            table.appendChild(head);
+
+            const body = document.createElement('tbody');
+            for (const row of result.rows) {
+                const tr = document.createElement('tr');
+                for (const value of row) {
+                    const td = document.createElement('td');
+                    td.textContent = value === null ? 'NULL' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+                    tr.appendChild(td);
+                }
+                body.appendChild(tr);
+            }
+            table.appendChild(body);
+            wrapper.appendChild(table);
+            container.appendChild(wrapper);
+        }
+
+        function clearSQLResults() {
+            document.getElementById('sqlError').textContent = '';
+            document.getElementById('sqlResults').replaceChildren();
         }
 
         async function api(method, path, body = null, token = null) {
@@ -394,7 +565,6 @@
             state.results = [];
             state.startTime = Date.now();
             state.token = null;
-            state.tokenUser3 = null;
             state.clientId = null;
             state.enderecoId = null;
             state.pedidoId = null;
@@ -424,9 +594,6 @@
                 finish();
                 return;
             }
-
-            // ═══ LOGIN USER 3 ═══
-            await testLoginUser3();
 
             // ═══ AUTH ═══
             await testAuthErrors();
@@ -482,7 +649,7 @@
                 if (ok && hasToken) {
                     state.token = hasToken;
                     addTest('Auth', 'POST /auth/login (sucesso)', 'POST', '/auth/login', true, status);
-                    log(`   ✅ Login OK — token: ${state.token.slice(0, 30)}...`, 'ok');
+                    log('   ✅ Login OK', 'ok');
                 } else {
                     addTest('Auth', 'POST /auth/login (sucesso)', 'POST', '/auth/login', false, status, data?.error?.message || 'sem token');
                     log(`   ❌ Login falhou: ${data?.error?.message}`, 'err');
@@ -490,26 +657,6 @@
             } catch (e) {
                 addTest('Auth', 'POST /auth/login (sucesso)', 'POST', '/auth/login', false, 0, e.message);
                 log(`   ❌ Login: ${e.message}`, 'err');
-            }
-        }
-
-        async function testLoginUser3() {
-            log('📋 Testando login user 3 (tenant 4)...', 'info');
-            try {
-                const { status, ok, data } = await api('POST', '/auth/login', {
-                    email: 'joao.silva@saajoao.com.br',
-                    senha: '123456',
-                });
-                if (ok && data?.data?.usuario?.token) {
-                    state.tokenUser3 = data.data.usuario.token;
-                    addTest('Auth', 'POST /auth/login (user 3)', 'POST', '/auth/login', true, status);
-                    log('   ✅ Login user 3 OK', 'ok');
-                } else {
-                    addTest('Auth', 'POST /auth/login (user 3)', 'POST', '/auth/login', false, status, 'falhou');
-                    log('   ⚠️ User 3 não conseguiu logar (talvez senha diferente)', 'err');
-                }
-            } catch (e) {
-                addTest('Auth', 'POST /auth/login (user 3)', 'POST', '/auth/login', false, 0, e.message);
             }
         }
 
@@ -941,27 +1088,59 @@
 
                 const div = document.createElement('div');
                 div.className = 'group';
-                div.innerHTML = `
-                    <div class="group-header">
-                        <span>${group}</span>
-                        <span class="group-stats">${ok}/${total}</span>
-                    </div>
-                    ${tests.map(t => `
-                        <div class="test">
-                            <div class="test-icon ${t.passed ? 'ok' : 'err'}">${t.passed ? '✓' : '✗'}</div>
-                            <div class="test-body">
-                                <div class="test-name">
-                                    <span class="badge ${t.method.toLowerCase()}">${t.method}</span>
-                                    ${t.name}
-                                </div>
-                                <div class="test-meta">HTTP ${t.status}</div>
-                                ${t.error ? `<div class="test-error">${t.error}</div>` : ''}
-                            </div>
-                        </div>
-                    `).join('')}
-                `;
+                const groupHeader = document.createElement('div');
+                groupHeader.className = 'group-header';
+                const groupName = document.createElement('span');
+                groupName.textContent = group;
+                const groupStats = document.createElement('span');
+                groupStats.className = 'group-stats';
+                groupStats.textContent = `${ok}/${total}`;
+                groupHeader.append(groupName, groupStats);
+                div.id = `test-group-${Object.keys(groups).indexOf(group)}`;
+                div.appendChild(groupHeader);
+
+                for (const test of tests) {
+                    const row = document.createElement('div');
+                    row.className = 'test';
+                    const icon = document.createElement('div');
+                    icon.className = `test-icon ${test.passed ? 'ok' : 'err'}`;
+                    icon.textContent = test.passed ? '✓' : '✗';
+                    const body = document.createElement('div');
+                    body.className = 'test-body';
+                    const name = document.createElement('div');
+                    name.className = 'test-name';
+                    const badge = document.createElement('span');
+                    const allowedMethods = ['get', 'post', 'put', 'delete'];
+                    badge.className = `badge ${allowedMethods.includes(test.method.toLowerCase()) ? test.method.toLowerCase() : ''}`;
+                    badge.textContent = test.method;
+                    name.append(badge, document.createTextNode(` ${test.name}`));
+                    const meta = document.createElement('div');
+                    meta.className = 'test-meta';
+                    meta.textContent = `HTTP ${test.status}`;
+                    body.append(name, meta);
+                    if (test.error) {
+                        const error = document.createElement('div');
+                        error.className = 'test-error';
+                        error.textContent = test.error;
+                        body.appendChild(error);
+                    }
+                    row.append(icon, body);
+                    div.appendChild(row);
+                }
                 container.appendChild(div);
             }
+
+            const menu = document.getElementById('testMenu');
+            menu.replaceChildren();
+            Object.keys(groups).forEach((group, index) => {
+                const button = document.createElement('button');
+                button.className = 'secondary';
+                button.textContent = group;
+                button.addEventListener('click', () => {
+                    document.getElementById(`test-group-${index}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                });
+                menu.appendChild(button);
+            });
 
             // Atualiza progresso
             const totalTests = state.results.length;
@@ -995,6 +1174,7 @@
         function clearResults() {
             state.results = [];
             document.getElementById('results').innerHTML = '';
+            document.getElementById('testMenu').replaceChildren();
             document.getElementById('log').innerHTML = '';
             document.getElementById('log').style.display = 'none';
             document.getElementById('summary').style.display = 'none';
@@ -1031,7 +1211,7 @@
 
         document.getElementById('log').style.display = 'block';
         log('Aguardando início dos testes...', 'dim');
-        log('Configure a URL, email e senha e clique em "Rodar todos os testes".', 'dim');
+        log('Configure a URL, email e senha; use "Entrar" para autenticar ou rode a suite completa.', 'dim');
     </script>
 </body>
 </html>

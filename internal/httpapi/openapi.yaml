@@ -44,6 +44,8 @@ tags:
     description: Agenda de visitas/compromissos
   - name: tarefa
     description: Tarefas do usuário
+  - name: desenvolvimento
+    description: Ferramentas locais restritas a desenvolvimento
 
 security:
   - bearerAuth: []
@@ -132,6 +134,48 @@ paths:
                     error: null
         '401':
           $ref: '#/components/responses/Unauthorized'
+
+  /dev/sql:
+    post:
+      tags: [desenvolvimento]
+      summary: Executar SQL no console de desenvolvimento
+      description: |
+        Disponível somente quando `APP_ENV=development` e `SQL_CONSOLE_ENABLED=true`.
+        Exige usuário do tipo `admin`, uma role PostgreSQL sem `SUPERUSER`/`BYPASSRLS`
+        nem propriedade efetiva de tabelas públicas com RLS sem `FORCE ROW LEVEL SECURITY`,
+        e um único SELECT/WITH/INSERT/UPDATE/DELETE. Cada execução usa uma transação
+        com `app.cod_tenant`, `app.cod_empresa` e `row_security=on`; a transação é
+        concluída após a execução. DDL, controle de transação e alteração de contexto
+        RLS são rejeitados. O resultado é limitado a 500 linhas, 1 MiB e 8 segundos.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sql]
+              properties:
+                sql:
+                  type: string
+                  maxLength: 16384
+                  example: SELECT codigo, nome_razao_social FROM cliente ORDER BY codigo LIMIT 20
+      responses:
+        '200':
+          description: Resultado tabular do comando.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SQLConsoleEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Console desabilitado fora do ambiente de desenvolvimento.
+        '413':
+          description: Resultado maior que 1 MiB; nenhuma alteração é commitada.
 
   # ═══════════════════════════════════════════════════════════
   # HOME
@@ -315,10 +359,12 @@ paths:
             type: string
         - name: status
           in: query
-          description: Filtro por situação
+          description: |
+            ativo = ativo não bloqueado e não prospect; inativo = ativo=false;
+            prospect = prospect=true; bloqueado = ativo com data/motivo de bloqueio vigente.
           schema:
             type: string
-            enum: [ativo, inativo, prospect]
+            enum: [ativo, inativo, prospect, bloqueado]
         - $ref: '#/components/parameters/LimitParam'
         - $ref: '#/components/parameters/CursorParam'
       responses:
@@ -343,6 +389,16 @@ paths:
                           cidade: São Paulo
                           estado: SP
                           ativo: true
+                          prospect: false
+                          situacao_cadastro: aberto
+                          situacao_compra: sem_compra
+                          data_inclusao: '2023-03-15'
+                          endereco_resumo: Av. Paulista 1000, Bela Vista
+                          endereco_completo: Av. Paulista 1000, Bela Vista, São Paulo, SP, 01310-100
+                          ultimo_pedido: null
+                          ultimo_atendimento: null
+                          data_ultima_visita: null
+                          possui_titulo_vencido: false
                       nextCursor: "24129"
                     error: null
         '401':
@@ -1029,13 +1085,28 @@ paths:
       tags: [catalogo]
       summary: Listar produtos
       description: |
-        # TODO: front ainda usa mock local — endpoint a integrar.
-        `stock` (JOIN `item_estoque`) e `preco_venda` (JOIN `tabela_preco_item`).
+        `stock` é a soma de `item_estoque.quantidade` nesta empresa.
+        `preco_venda` é resolvido pela tabela explícita, padrão do cliente, padrão do
+        produto, ou pelo preço-base do item quando nenhuma tabela está configurada.
+        Quando `cliente_id` e `tabela_preco_id` forem informados juntos, a tabela
+        explícita prevalece. Preços e vigência são limitados às faixas válidas hoje.
       parameters:
         - name: busca
           in: query
           schema:
             type: string
+        - name: cliente_id
+          in: query
+          description: Aplica a tabela de preço padrão do cliente quando não há tabela_preco_id.
+          schema:
+            type: integer
+            minimum: 1
+        - name: tabela_preco_id
+          in: query
+          description: Sobrescreve as tabelas padrão do cliente e do produto.
+          schema:
+            type: integer
+            minimum: 1
         - $ref: '#/components/parameters/LimitParam'
         - $ref: '#/components/parameters/CursorParam'
       responses:
@@ -1462,6 +1533,30 @@ components:
             - $ref: '#/components/schemas/APIError'
             - type: 'null'
 
+    SQLConsoleResult:
+      type: object
+      required: [columns, rows, row_count, truncated, command]
+      properties:
+        columns:
+          type: array
+          items: { type: string }
+        rows:
+          type: array
+          items:
+            type: array
+            items: {}
+        row_count: { type: integer }
+        truncated: { type: boolean }
+        command: { type: string }
+
+    SQLConsoleEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/APIResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/SQLConsoleResult'
+
     # ─── PAGINAÇÃO ───────────────────────────────────────
     CursorPage:
       type: object
@@ -1696,6 +1791,21 @@ components:
         bairro: { type: string }
         cidade: { type: string }
         estado: { type: string }
+        transportadora_padrao_id:
+          type: [integer, 'null']
+          description: ID do catálogo da empresa para o padrão comercial do cliente.
+        condicao_pagamento_padrao_id:
+          type: [integer, 'null']
+        forma_pagamento_padrao_id:
+          type: [integer, 'null']
+        tabela_preco_padrao_id:
+          type: [integer, 'null']
+        data_ultima_visita:
+          type: [string, 'null']
+          format: date
+        anotacao_usuario:
+          type: string
+          description: Anotação do usuário, separada de anotacao_erp.
 
     ClienteDetalhe:
       allOf:
@@ -1708,11 +1818,38 @@ components:
               type: string
             ativo:
               type: boolean
+            situacao_cadastro:
+              type: string
+              enum: [aberto, bloqueado, inativo]
+              description: >-
+                inativo quando ativo=false; bloqueado quando data_bloqueio já venceu ou motivo_bloqueio está preenchido;
+                aberto nos demais casos. Prospect é um atributo separado.
+            situacao_compra:
+              type: string
+              enum: [aberto, bloqueado, em_digitacao, sem_compra]
+              description: >-
+                bloqueado prevalece para clientes inativos/bloqueados; sem_compra quando não há pedido de venda
+                não cancelado; em_digitacao quando esse é o pedido mais recente; aberto nos demais casos.
+            ultimo_pedido:
+              type: [string, 'null']
+              format: date
+              description: Data de emissão do pedido de venda não cancelado mais recente.
+            ultimo_atendimento:
+              type: [string, 'null']
+              format: date
+              description: Data do compromisso concluído mais recente da agenda para o cliente.
+            possui_titulo_vencido:
+              type: boolean
+              description: Existe título não liquidado com vencimento anterior a hoje.
             data_inclusao:
               type:
                 - string
                 - 'null'
               format: date-time
+            endereco_resumo:
+              type: [string, 'null']
+            endereco_completo:
+              type: [string, 'null']
             enderecos:
               type: array
               items:
@@ -1754,6 +1891,41 @@ components:
             - 'null'
         ativo:
           type: boolean
+        prospect:
+          type: boolean
+        situacao_cadastro:
+          type: string
+          enum: [aberto, bloqueado, inativo]
+          description: >-
+            inativo quando ativo=false; bloqueado quando data_bloqueio já venceu ou motivo_bloqueio está preenchido;
+            aberto nos demais casos. Prospect é um atributo separado.
+        situacao_compra:
+          type: string
+          enum: [aberto, bloqueado, em_digitacao, sem_compra]
+          description: >-
+            bloqueado prevalece para clientes inativos/bloqueados; sem_compra quando não há pedido de venda
+            não cancelado; em_digitacao quando esse é o pedido mais recente; aberto nos demais casos.
+        data_inclusao:
+          type: [string, 'null']
+          format: date
+        endereco_resumo:
+          type: [string, 'null']
+        endereco_completo:
+          type: [string, 'null']
+        ultimo_pedido:
+          type: [string, 'null']
+          format: date
+          description: Data de emissão do pedido de venda mais recente não cancelado; orçamento não conta.
+        ultimo_atendimento:
+          type: [string, 'null']
+          format: date
+          description: Data do compromisso concluído mais recente vinculado ao cliente.
+        data_ultima_visita:
+          type: [string, 'null']
+          format: date
+        possui_titulo_vencido:
+          type: boolean
+          description: Existe título não liquidado com vencimento anterior a hoje.
 
     ClienteEnvelope:
       allOf:
@@ -1973,9 +2145,31 @@ components:
         marca: { type: string }
         unidade: { type: string }
         preco_venda: { type: number }
-        stock: { type: number }
-        peso_liquido: { type: number }
-        peso_bruto: { type: number }
+        stock:
+          type: number
+          description: Soma do estoque da empresa entre depósitos, na unidade comercial do produto, sem conversão.
+        peso_liquido:
+          type: number
+          description: Valor nativo do ERP; a API não converte unidades.
+        peso_bruto:
+          type: number
+          description: Valor nativo do ERP; a API não converte unidades.
+        cubagem:
+          type: number
+          description: Valor de cubagem_embalagem nativo do ERP; a API não converte unidades.
+        comprimento:
+          type: number
+          description: Valor de comprimento_embalagem nativo do ERP; a API não converte unidades.
+        largura:
+          type: number
+          description: Valor de largura_embalagem nativo do ERP; a API não converte unidades.
+        altura_espessura:
+          type: number
+          description: Valor de altura_embalagem nativo do ERP; a API não converte unidades.
+        qtde_embalagem:
+          type: number
+          description: Quantidade em qtde_volumes_embalagem; a API não converte unidades.
+        permite_venda_sem_estoque: { type: boolean }
 
     ItemPedido:
       type: object
@@ -1983,22 +2177,25 @@ components:
       properties:
         id:
           type: integer
+        codigo_cliente:
+          type: [string, 'null']
         sequence:
           type: integer
         product:
           $ref: '#/components/schemas/ProdutoPedido'
         price_table_id:
-          type: integer
+          type: [integer, 'null']
+          description: ID da tabela efetiva; quando omitido, resolve padrão do cliente e depois do produto.
         price_table_name:
-          type: string
+          type: [string, 'null']
         price_table_validity:
-          type: string
+          type: [string, 'null']
           format: date-time
         quantidade_informada:
           type: number
         sale_price:
           type: number
-          description: Preço praticado (= `preco_venda_praticado_digitado`)
+          description: Preço praticado; pode ser menor que o preço efetivo, mas não pode excedê-lo.
         original_price:
           type: number
           description: Preço sugerido (= `preco_venda_original_sugerido`)
@@ -2020,10 +2217,10 @@ components:
       type: object
       properties:
         quantidade_mix: { type: number }
-        quantidade_volume: { type: number }
-        volume_total_cubico: { type: number }
-        peso_liquido: { type: number }
-        peso_bruto: { type: number }
+        quantidade_volume: { type: number, description: Total calculado com qtde_volumes_embalagem nativo do ERP. }
+        volume_total_cubico: { type: number, description: Total calculado com cubagem_embalagem nativo do ERP. }
+        peso_liquido: { type: number, description: Total na unidade nativa do ERP, sem conversão. }
+        peso_bruto: { type: number, description: Total na unidade nativa do ERP, sem conversão. }
         valor_bruto: { type: number }
         valor_desconto: { type: number }
         valor_liquido: { type: number }
@@ -2046,14 +2243,14 @@ components:
             - string
             - 'null'
           format: date-time
-        empresa_id: { type: integer }
-        cliente_id: { type: integer }
-        condicao_pagamento_id: { type: integer }
-        forma_pagamento_id: { type: integer }
-        transportadora_id: { type: integer }
-        endereco_faturamento_id: { type: integer }
-        endereco_entrega_id: { type: integer }
-        endereco_cobranca_id: { type: integer }
+        empresa_id: { type: [integer, 'null'] }
+        cliente_id: { type: integer, minimum: 1 }
+        condicao_pagamento_id: { type: [integer, 'null'] }
+        forma_pagamento_id: { type: [integer, 'null'] }
+        transportadora_id: { type: [integer, 'null'] }
+        endereco_faturamento_id: { type: [integer, 'null'] }
+        endereco_entrega_id: { type: [integer, 'null'] }
+        endereco_cobranca_id: { type: [integer, 'null'] }
         valor_frete: { type: number }
         observacoes:
           type: string
@@ -2077,10 +2274,15 @@ components:
         preco_venda: { type: number, minimum: 0 }
         valor_desconto: { type: number, minimum: 0, default: 0 }
         sequence: { type: integer, minimum: 0 }
+        price_table_id:
+          type: [integer, 'null']
+          description: Tabela a aplicar; se omitida, o servidor resolve o padrão do cliente e do produto.
         product:
           $ref: '#/components/schemas/ProdutoPedido'
         quantidade_informada: { type: number }
-        sale_price: { type: number }
+        sale_price:
+          type: number
+          description: Preço praticado; pode ser menor que o preço efetivo, mas não pode excedê-lo.
         original_price: { type: number }
         valor_desconto_comercial: { type: number }
         data_entrega:
@@ -2092,6 +2294,11 @@ components:
           type:
             - string
             - 'null'
+        codigo_cliente:
+          type:
+            - string
+            - 'null'
+          maxLength: 50
 
     Pedido:
       type: object
@@ -2164,14 +2371,30 @@ components:
               type:
                 - object
                 - 'null'
+              properties:
+                id: { type: integer }
+                descricao: { type: string }
             forma_pagamento:
               type:
                 - object
                 - 'null'
+              properties:
+                id: { type: integer }
+                descricao: { type: string }
             transportadora:
               type:
                 - object
                 - 'null'
+              properties:
+                id: { type: integer }
+                nome: { type: string }
+                nome_razao: { type: string }
+            endereco_faturamento_id:
+              type: [integer, 'null']
+            endereco_entrega_id:
+              type: [integer, 'null']
+            endereco_cobranca_id:
+              type: [integer, 'null']
             valor_frete: { type: number }
             observacoes_pedido:
               type:
@@ -2299,7 +2522,7 @@ components:
             - string
             - 'null'
           format: date-time
-          description: '# TODO: derivar de tabela_preco_item.validade_inicial/final'
+          description: Data inicial mais recente de uma faixa vigente da tabela.
 
     TabelaPrecoCursorEnvelope:
       allOf:
@@ -2328,10 +2551,42 @@ components:
         preco_venda: { type: number }
         stock:
           type: number
-          description: Soma das quantidades registradas em item_estoque para o produto.
+          description: >-
+            Soma das quantidades em item_estoque para o tenant, empresa e produto,
+            agregada entre depósitos e na unidade comercial do produto, sem conversão.
         tabela_preco_padrao_id:
-          type: integer
-          description: '# TODO: schema não tem "tabela padrão do produto"'
+          type:
+            - integer
+            - 'null'
+          description: >-
+            Tabela efetiva: parâmetro tabela_preco_id, padrão do cliente ou padrão do produto.
+        tabela_preco_vigencia:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        peso_liquido:
+          type: number
+          description: Valor nativo gravado no ERP; a API não converte unidades.
+        peso_bruto:
+          type: number
+          description: Valor nativo gravado no ERP; a API não converte unidades.
+        cubagem:
+          type: number
+          description: Valor de cubagem_embalagem gravado no ERP; a API não converte unidades.
+        comprimento:
+          type: number
+          description: Valor de comprimento_embalagem gravado no ERP; a API não converte unidades.
+        largura:
+          type: number
+          description: Valor de largura_embalagem gravado no ERP; a API não converte unidades.
+        altura_espessura:
+          type: number
+          description: Valor de altura_embalagem gravado no ERP; a API não converte unidades.
+        qtde_embalagem:
+          type: number
+          description: Valor de item.qtde_volumes_embalagem; a API não converte unidades.
+        permite_venda_sem_estoque: { type: boolean }
 
     ProdutoCursorEnvelope:
       allOf:

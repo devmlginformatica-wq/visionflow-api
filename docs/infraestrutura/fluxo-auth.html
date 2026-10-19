@@ -342,8 +342,8 @@
 Content-Type: application/json
 
 {
-  "email": "admin@epare.com.br",
-  "senha": "123456"
+  "email": "seu-usuario@empresa.com.br",
+  "senha": "&lt;sua-senha&gt;"
 }</code></pre>
         </div>
 
@@ -397,7 +397,7 @@ LIMIT 1</code></pre>
     "usuario": {
       "id": 1,
       "nome": "Administrador",
-      "email": "admin@epare.com.br",
+      "email": "usuario@empresa.com.br",
       "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
     }
   },
@@ -680,6 +680,47 @@ LIMIT $2</code></pre>
                 </tr>
             </tbody>
         </table>
+
+        <h2>🧪 Console SQL de desenvolvimento</h2>
+        <div class="note">
+            <strong>⚠️ Ferramenta restrita:</strong> o console de <code>docs/api-tests.html</code>
+            só responde quando <code>APP_ENV=development</code> e
+            <code>SQL_CONSOLE_ENABLED=true</code>. Requer login de usuário
+            <code>admin</code> e uma role PostgreSQL sem <code>SUPERUSER</code>,
+            <code>BYPASSRLS</code> ou propriedade de tabelas públicas com RLS sem
+            <code>FORCE ROW LEVEL SECURITY</code>.
+        </div>
+        <div class="flow-step">
+            <div class="step-header">
+                <div class="step-number">1</div>
+                <div class="step-title">Autenticação normal da API</div>
+            </div>
+            <p>O usuário entra com email e senha no painel de testes. A página envia o JWT no cabeçalho Authorization; nenhuma senha ou token é salvo no HTML ou no localStorage pelo console.</p>
+        </div>
+        <div class="flow-step">
+            <div class="step-header">
+                <div class="step-number">2</div>
+                <div class="step-title">Uma execução = uma transação RLS</div>
+            </div>
+            <p><code>POST /dev/sql</code> recebe um único comando permitido. O servidor valida o papel de administrador, abre uma transação, define <code>app.cod_tenant</code> e <code>app.cod_empresa</code> a partir do JWT, ativa <code>row_security</code> e aplica timeout. São aceitos SELECT/WITH/INSERT/UPDATE/DELETE; DDL, comandos de transação e alteração do contexto RLS são rejeitados.</p>
+            <pre><code>POST /dev/sql
+Authorization: Bearer &lt;jwt&gt;
+Content-Type: application/json
+
+{"sql":"SELECT codigo, nome_razao_social FROM cliente ORDER BY codigo LIMIT 20"}</code></pre>
+        </div>
+        <div class="flow-step">
+            <div class="step-header">
+                <div class="step-number">3</div>
+                <div class="step-title">A transação é finalizada pelo servidor</div>
+            </div>
+            <p>Após a execução, a transação é commitada (inclusive comandos de escrita) e a conexão retorna ao pool. O navegador não abre nem mantém uma conexão PostgreSQL. O resultado tem limite de 500 linhas e a conexão física nunca é compartilhada entre execuções.</p>
+        </div>
+        <div class="note">
+            Para ativar somente no ambiente local, configure <code>APP_ENV=development</code> e
+            <code>SQL_CONSOLE_ENABLED=true</code>. Nunca habilite em produção; comandos de escrita
+            alteram dados imediatamente. O endpoint permanece desativado por padrão.
+        </div>
 
         <h2>📚 Glossário</h2>
 

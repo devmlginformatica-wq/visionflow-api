@@ -184,7 +184,6 @@ func TestDecodeRejectsInvalidRequestBodies(t *testing.T) {
 		{name: "multiple JSON values", body: `{"email":"a@example.test"} {}`},
 		{name: "malformed JSON", body: `{"email":`},
 	}
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(test.body))
@@ -198,6 +197,32 @@ func TestDecodeRejectsInvalidRequestBodies(t *testing.T) {
 			}
 			if recorder.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestValidDevelopmentSQL(t *testing.T) {
+	tests := []struct {
+		name      string
+		statement string
+		want      bool
+	}{
+		{name: "select", statement: "SELECT * FROM cliente", want: true},
+		{name: "write", statement: "UPDATE cliente SET nome_fantasia='X'", want: true},
+		{name: "cte", statement: "WITH rows AS (SELECT 1) SELECT * FROM rows", want: true},
+		{name: "leading comments", statement: "/* teste */ -- query\nSELECT 1", want: true},
+		{name: "empty", statement: "  -- somente comentário", want: false},
+		{name: "ddl", statement: "DROP TABLE cliente", want: false},
+		{name: "transaction command", statement: "COMMIT", want: false},
+		{name: "change RLS context", statement: "SELECT set_config('app.cod_tenant','9',true)", want: false},
+		{name: "change RLS context in cte", statement: "WITH x AS (SELECT set_config('app.cod_tenant','9',true)) SELECT * FROM cliente", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validDevelopmentSQL(test.statement); got != test.want {
+				t.Fatalf("validDevelopmentSQL(%q) = %t, want %t", test.statement, got, test.want)
 			}
 		})
 	}

@@ -26,10 +26,10 @@ O projeto usa **PostgreSQL 16** com:
 - **White label** — suporta revendedores com marca própria (`revendedor`)
 - **Flyway** — controle de versão do schema
 
-**Migrations no repositório:** V001 a V011. O banco de desenvolvimento
-inspecionado em 2026-10-15 estava no baseline 5 + V006 a V010; V011 estava
-pendente. Consulte `flyway info` antes de aplicar migrations em qualquer outro
-ambiente.
+**Migrations no repositório:** V001 a V016. A V016 acrescenta campos complementares
+de cliente (`data_ultima_visita`, `anotacao_usuario`) e item de pedido (`codigo_cliente`)
+usados pelos contratos atuais. Consulte `flyway info` e valide o ambiente antes de
+aplicar migrations; não execute migrations em produção sem a janela de mudança aprovada.
 
 ---
 
@@ -50,7 +50,12 @@ db/
 │   ├── V008__notificacao.sql
 │   ├── V009__agenda_tarefa.sql
 │   ├── V010__empresa_regional.sql
-│   └── V011__pgcrypto_password_validation.sql
+│   ├── V011__pgcrypto_password_validation.sql
+│   ├── V012__fix_demo_admin_password_hash.sql
+│   ├── V013__soft_delete.sql
+│   ├── V014__fix_saajoao_seed_passwords.sql
+│   ├── V015__pedido_data_entrega.sql
+│   └── V016__api_editor_campos_complementares.sql
 ├── seeds/                   # Dados de teste (não vão para produção)
 ├── scripts/                 # Automação
 │   ├── reset_db.sh

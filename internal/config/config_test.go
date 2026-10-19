@@ -30,3 +30,50 @@ func TestDSNEscapesCredentialsAndUsesConfiguredSSLMode(t *testing.T) {
 		t.Fatalf("DSN sslmode = %q, want require", got)
 	}
 }
+
+func TestLoadSQLConsoleIsDisabledByDefault(t *testing.T) {
+	t.Setenv("DB_USER", "test")
+	t.Setenv("DB_PASSWORD", "test")
+	t.Setenv("DB_NAME", "test")
+	t.Setenv("JWT_SECRET", "test")
+	t.Setenv("SQL_CONSOLE_ENABLED", "")
+	t.Setenv("APP_ENV", "")
+
+	config, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if config.SQLConsoleEnabled {
+		t.Fatal("SQLConsoleEnabled defaults to true, want disabled")
+	}
+	if config.AppEnv != "production" {
+		t.Fatalf("AppEnv = %q, want production", config.AppEnv)
+	}
+}
+
+func TestLoadRejectsInvalidSQLConsoleFlag(t *testing.T) {
+	t.Setenv("DB_USER", "test")
+	t.Setenv("DB_PASSWORD", "test")
+	t.Setenv("DB_NAME", "test")
+	t.Setenv("JWT_SECRET", "test")
+	t.Setenv("SQL_CONSOLE_ENABLED", "enabled")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted an invalid SQL_CONSOLE_ENABLED value")
+	}
+}
+
+func TestSQLConsoleFlagParse(t *testing.T) {
+	t.Setenv("DB_USER", "test")
+	t.Setenv("DB_PASSWORD", "test")
+	t.Setenv("DB_NAME", "test")
+	t.Setenv("JWT_SECRET", "test")
+	t.Setenv("SQL_CONSOLE_ENABLED", "true")
+
+	config, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !config.SQLConsoleEnabled {
+		t.Fatal("SQLConsoleEnabled = false, want true")
+	}
+}
