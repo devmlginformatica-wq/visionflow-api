@@ -324,7 +324,7 @@
     <div class="container">
         <header>
             <h1>🧪 VisionFlow API — Testes Automatizados</h1>
-            <div class="subtitle">Testes de endpoints e console SQL de desenvolvimento com contexto RLS por execução<br>Sirva esta página em uma origem permitida por CORS (por exemplo, localhost:5173 ou :3000); o navegador pode bloquear chamadas quando aberta via file://.</div>
+            <div class="subtitle">Testes de endpoints e console SQL de desenvolvimento com contexto RLS por execução<br>Execute a suíte apenas em desenvolvimento: ela cria registros e algumas exclusões são lógicas. O console SQL é separado e não é chamado pela suíte.<br>Sirva esta página em uma origem permitida por CORS (por exemplo, localhost:5173 ou :3000); o navegador pode bloquear chamadas quando aberta via file://.</div>
         </header>
 
         <div class="controls">
@@ -602,49 +602,57 @@
             log(`   API: ${apiUrl()}`, 'dim');
             log('');
 
-            // ═══ HEALTH ═══
-            await testHealth();
+            try {
+                // ═══ HEALTH ═══
+                await testHealth();
 
-            // ═══ LOGIN ═══
-            await testLogin(email, password);
+                // ═══ LOGIN ═══
+                await testLogin(email, password);
 
-            if (!state.token) {
-                log('❌ Login falhou. Abortando testes.', 'err');
+                if (!state.token) {
+                    log('❌ Login falhou. Abortando testes.', 'err');
+                    return;
+                }
+
+                // ═══ AUTH ═══
+                await testAuthErrors();
+
+                // ═══ CLIENTES (READ) ═══
+                await testClientesRead();
+
+                // ═══ CLIENTES (WRITE) ═══
+                await testClientesWrite();
+
+                // ═══ ENDEREÇOS ═══
+                await testEnderecos();
+
+                // ═══ CONTAS A RECEBER ═══
+                await testContasReceber();
+
+                // ═══ PEDIDOS ═══
+                await testPedidos();
+
+                // ═══ CAMPOS NOVOS (V016) ═══
+                await testCamposNovos();
+
+                // ═══ INTEGRAÇÃO ERP ═══
+                await testIntegracaoERP();
+
+                // ═══ CATÁLOGOS ═══
+                await testCatalogos();
+
+                // ═══ AGENDA E TAREFAS ═══
+                await testAgendaTarefas();
+
+                // ═══ SHELL, HOME, NOTIFICAÇÕES ═══
+                await testShellHomeNotif();
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                addTest('Suite', 'Execução interrompida', 'RUN', '', false, 0, message);
+                log(`❌ Execução interrompida: ${message}`, 'err');
+            } finally {
                 finish();
-                return;
             }
-
-            // ═══ AUTH ═══
-            await testAuthErrors();
-
-            // ═══ CLIENTES (READ) ═══
-            await testClientesRead();
-
-            // ═══ CLIENTES (WRITE) ═══
-            await testClientesWrite();
-
-            // ═══ ENDEREÇOS ═══
-            await testEnderecos();
-
-            // ═══ CONTAS A RECEBER ═══
-            await testContasReceber();
-
-            // ═══ PEDIDOS ═══
-            await testPedidos();
-
-            // ═══ CAMPOS NOVOS (V016) ═══
-            await testCamposNovos();
-
-            // ═══ CATÁLOGOS ═══
-            await testCatalogos();
-
-            // ═══ AGENDA E TAREFAS ═══
-            await testAgendaTarefas();
-
-            // ═══ SHELL, HOME, NOTIFICAÇÕES ═══
-            await testShellHomeNotif();
-
-            finish();
         }
 
         // ═══ HEALTH ═══
@@ -910,37 +918,66 @@
                 addTest('Pedidos', 'GET /pedidos', 'GET', '/pedidos', false, 0, e.message);
             }
 
-            // Criar (precisa de cliente + produto)
+            // Use o preço efetivo do cliente em vez de assumir um valor fixo.
             const clientes = await api('GET', '/clientes?limit=1', null, state.token);
             const clienteId = clientes.data?.data?.items?.[0]?.id;
-            const produtos = await api('GET', '/produtos?limit=1', null, state.token);
-            const produtoId = produtos.data?.data?.items?.[0]?.id;
+            const produtos = clienteId
+                ? await api('GET', `/produtos?limit=100&cliente_id=${clienteId}`, null, state.token)
+                : null;
+            const produto = produtos?.data?.data?.items?.find(item => {
+                const price = Number(item?.preco_venda ?? item?.sale_price);
+                return Number.isFinite(price) && price > 0;
+            });
 
-            if (clienteId && produtoId) {
-                try {
-                    const { status, ok, data } = await api('POST', '/pedidos', {
-                        tipo: 'pedido',
-                        cliente_id: clienteId,
-                        itens: [{
-                            produto_id: produtoId,
-                            quantidade: 1,
-                            preco_venda: 10.00,
-                            valor_desconto: 0,
-                        }],
-                    }, state.token);
-                    if (ok && data?.data?.id) {
-                        state.pedidoId = data.data.id;
-                        addTest('Pedidos', 'POST /pedidos', 'POST', '/pedidos', true, status);
-                        log(`   ✅ Pedido criado id=${state.pedidoId}`, 'ok');
-                    } else {
-                        addTest('Pedidos', 'POST /pedidos', 'POST', '/pedidos', false, status, data?.error?.message);
-                        log(`   ❌ Criar pedido → ${status}`, 'err');
-                    }
-                } catch (e) {
-                    addTest('Pedidos', 'POST /pedidos', 'POST', '/pedidos', false, 0, e.message);
+            const skipPedidosWrite = reason => {
+                addTest('Pedidos', 'POST /pedidos', 'POST', '/pedidos', true, 'SKIP', reason, null, true);
+                addTest('Pedidos', 'GET /pedidos/{id}', 'GET', '/pedidos/{id}', true, 'SKIP', reason, null, true);
+                addTest('Pedidos', 'DELETE /pedidos/{id}', 'DELETE', '/pedidos/{id}', true, 'SKIP', reason, null, true);
+                log(`   ⏭️ Testes de escrita de pedido ignorados: ${reason}`, 'dim');
+            };
+
+            if (!clienteId) {
+                skipPedidosWrite('nenhum cliente disponível no ambiente.');
+                return;
+            }
+            if (!produtos?.ok || !Array.isArray(produtos.data?.data?.items)) {
+                addTest('Pedidos', 'POST /pedidos', 'POST', '/pedidos', false, produtos?.status ?? 0,
+                    produtos?.data?.error?.message || 'Resposta inválida ao consultar produtos para o cliente.');
+                return;
+            }
+            if (!produto) {
+                skipPedidosWrite('nenhum produto com preço efetivo positivo disponível para o cliente.');
+                return;
+            }
+
+            const clienteDetail = await api('GET', `/clientes/${clienteId}`, null, state.token);
+            const priceTableId = produto.price_table_id ??
+                produto.tabela_preco_padrao_id ??
+                clienteDetail.data?.data?.tabela_preco_padrao_id ??
+                null;
+
+            try {
+                const { status, ok, data } = await api('POST', '/pedidos', {
+                    tipo: 'pedido',
+                    cliente_id: clienteId,
+                    itens: [{
+                        produto_id: produto.id,
+                        quantidade: 1,
+                        preco_venda: Number(produto.preco_venda ?? produto.sale_price),
+                        price_table_id: priceTableId,
+                        valor_desconto: 0,
+                    }],
+                }, state.token);
+                if (ok && data?.data?.id) {
+                    state.pedidoId = data.data.id;
+                    addTest('Pedidos', 'POST /pedidos', 'POST', '/pedidos', true, status);
+                    log(`   ✅ Pedido criado id=${state.pedidoId}`, 'ok');
+                } else {
+                    addTest('Pedidos', 'POST /pedidos', 'POST', '/pedidos', false, status, data?.error?.message);
+                    log(`   ❌ Criar pedido → ${status}`, 'err');
                 }
-            } else {
-                addTest('Pedidos', 'POST /pedidos', 'POST', '/pedidos', false, 0, 'sem cliente/produto');
+            } catch (e) {
+                addTest('Pedidos', 'POST /pedidos', 'POST', '/pedidos', false, 0, e.message);
             }
 
             // Detalhe
@@ -1119,8 +1156,6 @@
                 log('   ⏭️ Round-trip do pedido ignorado: nenhum produto com preço efetivo positivo.', 'dim');
                 return;
             }
-            const orderProduct = pricedProduct;
-
             let customerId;
             try {
                 const customerList = await api('GET', '/clientes?limit=1', null, state.token);
@@ -1145,7 +1180,36 @@
                 return;
             }
 
-            const selectedPrice = pricedProduct.sale_price ?? pricedProduct.preco_venda;
+            let effectiveCatalog;
+            try {
+                effectiveCatalog = await api(
+                    'GET', `/produtos?limit=100&cliente_id=${customerId}`, null, state.token,
+                );
+            } catch (error) {
+                for (const [name, method, path] of [
+                    ['POST /pedidos (round-trip de código/tabela)', 'POST', '/pedidos'],
+                    ['GET /pedidos/{id} (round-trip de código/tabela)', 'GET', '/pedidos/{id}'],
+                    ['POST /pedidos (rejeição de preço acima do efetivo)', 'POST', '/pedidos'],
+                ]) {
+                    addTest(group, name, method, path, false, 0, error.message);
+                }
+                return;
+            }
+            const orderProduct = effectiveCatalog.data?.data?.items?.find(item => item.id === pricedProduct.id);
+            if (!effectiveCatalog.ok || !orderProduct) {
+                const message = effectiveCatalog.data?.error?.message ||
+                    'Produto sem preço efetivo para o cliente selecionado.';
+                for (const [name, method, path] of [
+                    ['POST /pedidos (round-trip de código/tabela)', 'POST', '/pedidos'],
+                    ['GET /pedidos/{id} (round-trip de código/tabela)', 'GET', '/pedidos/{id}'],
+                    ['POST /pedidos (rejeição de preço acima do efetivo)', 'POST', '/pedidos'],
+                ]) {
+                    addTest(group, name, method, path, false, effectiveCatalog.status, message);
+                }
+                return;
+            }
+
+            const selectedPrice = orderProduct.sale_price ?? orderProduct.preco_venda;
             const selectedTableId = orderProduct.price_table_id ?? orderProduct.tabela_preco_padrao_id ?? null;
             const productCode = orderProduct.codigo_erp ?? null;
             const requestItem = {
@@ -1181,7 +1245,8 @@
                     const detail = await api('GET', `/pedidos/${orderId}`, null, state.token);
                     const item = detail.data?.data?.itens?.[0];
                     const codeMatches = item?.codigo_cliente === requestItem.codigo_cliente;
-                    const tableMatches = (item?.price_table_id ?? null) === selectedTableId;
+                    const tableMatches = selectedTableId != null &&
+                        Number(item?.price_table_id) === Number(selectedTableId);
                     const productMatches = !productCode || item?.product?.codigo_erp === productCode;
                     const roundTrip = detail.ok && item && codeMatches && tableMatches && productMatches;
                     addTest(group, `GET /pedidos/${orderId} (round-trip de código/tabela)`, 'GET',
@@ -1229,6 +1294,161 @@
                 addTest(group, 'POST /pedidos (rejeição de preço acima do efetivo)', 'POST', '/pedidos',
                     false, 0, error.message);
                 log(`   ❌ Validar rejeição de preço acima do efetivo: ${error.message}`, 'err');
+            }
+        }
+
+        // ═══ INTEGRAÇÃO ERP ═══
+
+        async function testIntegracaoERP() {
+            const group = 'Integração ERP';
+            const path = '/clientes';
+            const name = `Teste Integração ERP ${Date.now()}`;
+            let clienteId = null;
+            log('📋 Testando fila, rejeição, correção e retorno do ERP...', 'info');
+
+            try {
+                const created = await api('POST', path, {
+                    nome_razao_social: name,
+                    tipo_pessoa: 'PJ',
+                }, state.token);
+                clienteId = created.data?.data?.id ?? null;
+                if (!created.ok || !clienteId) {
+                    addTest(group, 'POST /clientes (cadastro temporário)', 'POST', path, false,
+                        created.status, created.data?.error?.message || 'Não foi possível criar cliente de teste.');
+                    return;
+                }
+
+                const initial = await api('GET', `/clientes/${clienteId}`, null, state.token);
+                const startsInDraft = initial.ok &&
+                    initial.data?.data?.status_integracao === 'em_digitacao' &&
+                    initial.data?.data?.codigo_erp == null;
+                addTest(group, 'Cliente começa em_digitacao sem codigo_erp', 'GET', `/clientes/${clienteId}`,
+                    startsInDraft, initial.status,
+                    startsInDraft ? null : 'O cadastro deve iniciar em_digitacao e sem código ERP.');
+                if (!startsInDraft) return;
+
+                const firstFinalize = await api('POST', `/clientes/${clienteId}/finalizar`, {}, state.token);
+                const firstIntegrationId = firstFinalize.data?.data?.integracao_id;
+                const sentToQueue = firstFinalize.status === 202 &&
+                    firstFinalize.data?.data?.status === 'em_integracao' &&
+                    Number.isInteger(firstIntegrationId);
+                addTest(group, 'POST /clientes/{id}/finalizar', 'POST', `/clientes/${clienteId}/finalizar`,
+                    sentToQueue, firstFinalize.status,
+                    sentToQueue ? null : firstFinalize.data?.error?.message || 'O cliente não entrou na fila ERP.');
+                if (!sentToQueue) return;
+
+                const pending = await api('GET', '/integracao/cliente/pendentes?limit=100', null, state.token);
+                const firstQueueItem = pending.data?.data?.items?.find(item =>
+                    item.entidade_id === clienteId && item.integracao_id === firstIntegrationId);
+                const queuedWithoutCode = pending.ok && firstQueueItem &&
+                    firstQueueItem.dados?.codigo_erp == null;
+                addTest(group, 'GET /integracao/cliente/pendentes', 'GET',
+                    '/integracao/cliente/pendentes', queuedWithoutCode, pending.status,
+                    queuedWithoutCode ? null : 'Cliente não encontrado na fila ou já contém codigo_erp.');
+                if (!queuedWithoutCode) return;
+
+                const blockedUpdate = await api('PUT', `/clientes/${clienteId}`, {
+                    nome_razao_social: `${name} bloqueado`,
+                    tipo_pessoa: 'PJ',
+                }, state.token);
+                const blockedWhilePending = blockedUpdate.status === 409 &&
+                    blockedUpdate.data?.error?.code === 'INTEGRACAO_BLOQUEADA';
+                addTest(group, 'PUT /clientes/{id} bloqueado em_integracao', 'PUT',
+                    `/clientes/${clienteId}`, blockedWhilePending, blockedUpdate.status,
+                    blockedWhilePending ? null : 'Edição durante em_integracao deve retornar 409 INTEGRACAO_BLOQUEADA.');
+                if (!blockedWhilePending) return;
+
+                const rejectionReason = 'Rejeição de teste da suíte ERP.';
+                const rejected = await api('POST', `/integracao/cliente/${clienteId}/retorno`, {
+                    integracao_id: firstIntegrationId,
+                    sucesso: false,
+                    motivo_rejeicao: rejectionReason,
+                }, state.token);
+                const rejectionAccepted = rejected.ok && rejected.data?.data?.status === 'erro';
+                addTest(group, 'POST /integracao/cliente/{id}/retorno (rejeição)', 'POST',
+                    `/integracao/cliente/${clienteId}/retorno`, rejectionAccepted, rejected.status,
+                    rejectionAccepted ? null : rejected.data?.error?.message || 'Retorno de rejeição não processado.');
+                if (!rejectionAccepted) return;
+
+                const afterRejection = await api('GET', `/clientes/${clienteId}`, null, state.token);
+                const rejectionRecorded = afterRejection.ok &&
+                    afterRejection.data?.data?.status_integracao === 'erro_integracao' &&
+                    afterRejection.data?.data?.motivo_rejeicao === rejectionReason &&
+                    afterRejection.data?.data?.codigo_erp == null;
+                addTest(group, 'GET /clientes/{id} registra erro e motivo ERP', 'GET',
+                    `/clientes/${clienteId}`, rejectionRecorded, afterRejection.status,
+                    rejectionRecorded ? null : 'Status, motivo ou codigo_erp após rejeição não corresponde.');
+                if (!rejectionRecorded) return;
+
+                const corrected = await api('PUT', `/clientes/${clienteId}`, {
+                    nome_razao_social: `${name} corrigido`,
+                    tipo_pessoa: 'PJ',
+                }, state.token);
+                const correctionAllowed = corrected.ok &&
+                    corrected.data?.data?.nome_razao_social === `${name} corrigido`;
+                addTest(group, 'PUT /clientes/{id} permitido após erro', 'PUT',
+                    `/clientes/${clienteId}`, correctionAllowed, corrected.status,
+                    correctionAllowed ? null : corrected.data?.error?.message || 'Correção após erro ERP não foi persistida.');
+                if (!correctionAllowed) return;
+
+                const retry = await api('POST', `/clientes/${clienteId}/finalizar`, {}, state.token);
+                const retryIntegrationId = retry.data?.data?.integracao_id;
+                const retryQueued = retry.status === 202 &&
+                    retry.data?.data?.status === 'em_integracao' &&
+                    Number.isInteger(retryIntegrationId) &&
+                    retryIntegrationId !== firstIntegrationId;
+                addTest(group, 'POST /clientes/{id}/finalizar (reenvio)', 'POST',
+                    `/clientes/${clienteId}/finalizar`, retryQueued, retry.status,
+                    retryQueued ? null : retry.data?.error?.message || 'Cliente não foi reenfileirado após correção.');
+                if (!retryQueued) return;
+
+                const retryPending = await api('GET', '/integracao/cliente/pendentes?limit=100', null, state.token);
+                const retryItem = retryPending.data?.data?.items?.find(item =>
+                    item.entidade_id === clienteId && item.integracao_id === retryIntegrationId);
+                const secondAttempt = retryPending.ok && retryItem?.tentativa === 2;
+                addTest(group, 'GET /integracao/cliente/pendentes (segunda tentativa)', 'GET',
+                    '/integracao/cliente/pendentes', secondAttempt, retryPending.status,
+                    secondAttempt ? null : 'A tentativa de reenvio deveria ser a número 2.');
+                if (!secondAttempt) return;
+
+                const retryReason = 'Rejeição da segunda tentativa de teste ERP.';
+                const retryRejected = await api('POST', `/integracao/cliente/${clienteId}/retorno`, {
+                    integracao_id: retryIntegrationId,
+                    sucesso: false,
+                    motivo_rejeicao: retryReason,
+                }, state.token);
+                const secondRejectionAccepted = retryRejected.ok &&
+                    retryRejected.data?.data?.status === 'erro';
+                addTest(group, 'POST /integracao/cliente/{id}/retorno (rejeição após reenvio)', 'POST',
+                    `/integracao/cliente/${clienteId}/retorno`, secondRejectionAccepted, retryRejected.status,
+                    secondRejectionAccepted ? null : retryRejected.data?.error?.message || 'Segunda rejeição não processada.');
+                if (!secondRejectionAccepted) return;
+
+                const afterRetryRejection = await api('GET', `/clientes/${clienteId}`, null, state.token);
+                const retryRejectionRecorded = afterRetryRejection.ok &&
+                    afterRetryRejection.data?.data?.status_integracao === 'erro_integracao' &&
+                    afterRetryRejection.data?.data?.motivo_rejeicao === retryReason &&
+                    afterRetryRejection.data?.data?.codigo_erp == null;
+                addTest(group, 'GET /clientes/{id} registra rejeição após reenvio', 'GET',
+                    `/clientes/${clienteId}`, retryRejectionRecorded, afterRetryRejection.status,
+                    retryRejectionRecorded ? null : 'Status, motivo ou codigo_erp após a segunda rejeição está incorreto.');
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                addTest(group, 'Fluxo ERP do cliente', 'RUN', path, false, 0, message);
+                log(`   ❌ Fluxo de integração ERP: ${message}`, 'err');
+            } finally {
+                if (clienteId) {
+                    try {
+                        const removed = await api('DELETE', `/clientes/${clienteId}`, null, state.token);
+                        addTest(group, `DELETE /clientes/${clienteId} (limpeza)`, 'DELETE',
+                            `/clientes/${clienteId}`, removed.ok, removed.status,
+                            removed.ok ? null : removed.data?.error?.message || 'Falha ao limpar cliente ERP temporário.');
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        addTest(group, `DELETE /clientes/${clienteId} (limpeza)`, 'DELETE',
+                            `/clientes/${clienteId}`, false, 0, message);
+                    }
+                }
             }
         }
 
