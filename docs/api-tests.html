@@ -292,16 +292,32 @@
             margin-bottom: 12px;
         }
         textarea:focus { outline: none; border-color: #58a6ff; }
-        .sql-table-wrap { overflow: auto; max-height: 480px; }
-        .sql-table { width: 100%; border-collapse: collapse; font: 12px monospace; }
+        .sql-table-wrap {
+            width: 100%;
+            max-height: 480px;
+            overflow: auto;
+            overscroll-behavior: contain;
+            scrollbar-color: #484f58 #161b22;
+        }
+        .sql-table-wrap:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
+        .sql-table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; table-layout: auto; font: 12px monospace; }
         .sql-table th, .sql-table td {
             border: 1px solid #30363d;
             padding: 8px;
             text-align: left;
             white-space: pre-wrap;
             overflow-wrap: anywhere;
+            vertical-align: top;
+            min-width: 140px;
+            max-width: 360px;
         }
-        .sql-table th { position: sticky; top: 0; background: #1c2128; color: #f0f6fc; }
+        .sql-table th { position: sticky; top: 0; z-index: 1; background: #1c2128; color: #f0f6fc; }
+
+        @media (max-width: 640px) {
+            body { padding: 12px; }
+            .sql-panel, .sql-results { padding: 12px; }
+            .sql-table th, .sql-table td { min-width: 120px; max-width: 280px; }
+        }
     </style>
 </head>
 <body>
@@ -490,6 +506,9 @@
 
             const wrapper = document.createElement('div');
             wrapper.className = 'sql-table-wrap';
+            wrapper.tabIndex = 0;
+            wrapper.setAttribute('role', 'region');
+            wrapper.setAttribute('aria-label', 'Resultado SQL. Use rolagem horizontal para visualizar todas as colunas.');
             const table = document.createElement('table');
             table.className = 'sql-table';
             const head = document.createElement('thead');
