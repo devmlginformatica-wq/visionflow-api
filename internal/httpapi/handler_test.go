@@ -12,6 +12,28 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+func TestValidSearch(t *testing.T) {
+	tests := []struct {
+		name    string
+		search  string
+		wantErr bool
+	}{
+		{name: "empty search"},
+		{name: "exactly 100 characters", search: strings.Repeat("a", 100)},
+		{name: "100 unicode characters", search: strings.Repeat("é", 100)},
+		{name: "over 100 characters", search: strings.Repeat("a", 101), wantErr: true},
+		{name: "over 100 unicode characters", search: strings.Repeat("é", 101), wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validSearch(test.search); (err != nil) != test.wantErr {
+				t.Fatalf("validSearch() error = %v, wantErr %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestExtractBearerToken(t *testing.T) {
 	tests := []struct {
 		name   string

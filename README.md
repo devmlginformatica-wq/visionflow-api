@@ -214,6 +214,26 @@ flyway -configFiles=./db/flyway.conf migrate
 go run ./cmd/api
 ```
 
+### Preparar ambiente local para os testes E2E
+
+Com PostgreSQL nativo ativo, `.env` e `db/flyway.conf` configurados e Flyway,
+`psql` e `pg_isready` disponíveis no `PATH`, prepare o banco com:
+
+```bash
+./dev-up.sh
+```
+
+O script valida a conexão, aplica migrations pendentes e executa os seeds
+idempotentes do Demo Comercial; não recria nem limpa o banco. Depois, execute
+`npm run test:e2e` no diretório `VisionFlow`. O Playwright inicia a API com
+`go run ./cmd/api` e o Vite automaticamente.
+
+A migration V017 cria índices PostgreSQL `CONCURRENTLY` e usa o arquivo
+`db/migrations/V017__indices_busca_textual.sql.conf` para executá-los fora de
+uma transação, conforme a configuração por script do Flyway. A configuração
+PostgreSQL `flyway.postgresql.transactional.lock=false` usa lock de sessão e
+evita que o lock transacional do Flyway bloqueie a criação concorrente dos índices.
+
 Serviços disponíveis:
 
 | Serviço | URL |

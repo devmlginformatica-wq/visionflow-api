@@ -241,6 +241,11 @@ func (h *Handler) Catalogo(w http.ResponseWriter, r *http.Request) {
 		bad(w, http.StatusBadRequest, "REQUISICAO_INVALIDA", err.Error())
 		return
 	}
+	search := r.URL.Query().Get("busca")
+	if err := validSearch(search); err != nil {
+		bad(w, http.StatusBadRequest, "REQUISICAO_INVALIDA", err.Error())
+		return
+	}
 	resource := strings.TrimPrefix(r.URL.Path, "/")
 	var clienteID, tabelaPrecoID *int
 	if resource == "produtos" {
@@ -259,7 +264,7 @@ func (h *Handler) Catalogo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	items, next, err := h.Service.CatalogoComPreco(r.Context(), tenantID, empresaID,
-		userID, resource, r.URL.Query().Get("busca"), limit, cursor, clienteID, tabelaPrecoID)
+		userID, resource, search, limit, cursor, clienteID, tabelaPrecoID)
 	if err != nil {
 		writeServiceError(w, err, "Não foi possível consultar o catálogo.")
 		return

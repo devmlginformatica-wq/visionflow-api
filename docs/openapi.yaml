@@ -310,9 +310,10 @@ paths:
       parameters:
         - name: busca
           in: query
-          description: Busca por razão social, fantasia ou CNPJ/CPF
+          description: Busca parcial, sem diferenciar maiúsculas/minúsculas ou acentos, por razão social, fantasia, CNPJ/CPF ou código ERP (máximo de 100 caracteres).
           schema:
             type: string
+            maxLength: 100
         - name: status
           in: query
           description: Filtro por situação
@@ -1028,14 +1029,14 @@ paths:
     get:
       tags: [catalogo]
       summary: Listar produtos
-      description: |
-        # TODO: front ainda usa mock local — endpoint a integrar.
-        `stock` (JOIN `item_estoque`) e `preco_venda` (JOIN `tabela_preco_item`).
+      description: Busca parcial, sem diferenciar maiúsculas/minúsculas ou acentos, por descrição ou código ERP (máximo de 100 caracteres). Retorna itens paginados.
       parameters:
         - name: busca
           in: query
+          description: Texto parcial para pesquisar descrição ou código ERP.
           schema:
             type: string
+            maxLength: 100
         - $ref: '#/components/parameters/LimitParam'
         - $ref: '#/components/parameters/CursorParam'
       responses:

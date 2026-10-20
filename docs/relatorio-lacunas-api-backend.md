@@ -96,6 +96,8 @@ Definir claramente unidade de medida para dimensões/cubagem, origem do estoque 
 
 **Preço e tabela:** `Produto.tabela_preco_padrao_id` está marcado como TODO no OpenAPI, e `TabelaPreco.vigencia` também tem derivação pendente. Definir a origem do preço e da tabela efetiva para o cliente/empresa, e retornar tabela, vigência e preço coerentes. Se o preço depender do cliente ou da tabela escolhida, documentar os parâmetros necessários (por exemplo, `cliente_id` e/ou `tabela_preco_id`) e validar o preço no servidor. O frontend não deve usar ID `0` ou preço genérico como substituto de dados ausentes.
 
+**Correção aplicada ao pedido:** a validação de `POST/PUT /pedidos` compara agora com `tabela_preco_item.preco_venda`, o mesmo preço regular exposto pelo catálogo `/produtos`. A promoção vigente não substitui esse valor durante a validação, pois o catálogo consumido pelo editor ainda não retorna o preço promocional.
+
 ### 4. Garantir round-trip dos itens e endereços de pedido — prioridade alta
 
 O editor permite alterar tabela de preço e código do produto no cliente, mas o payload atual enviado a `POST/PUT /pedidos` leva somente produto, quantidade, preço e desconto. Os campos `priceTableId` e `customerCode` se perdem ao salvar; `PedidoItemCreate` não documenta o ID da tabela, e `ItemPedido` não documenta `codigo_cliente`.

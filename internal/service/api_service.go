@@ -815,12 +815,7 @@ func insertPedidoItems(ctx context.Context, tx pgx.Tx, tenantID, empresaID int, 
 		var officialPrice sql.NullFloat64
 		if priceCode != nil {
 			err = tx.QueryRow(ctx, `
-				SELECT COALESCE(
-				  CASE WHEN tpi.preco_venda_promocao>0
-				    AND (tpi.validade_inicial_promocao IS NULL OR tpi.validade_inicial_promocao<=$4::date)
-				    AND (tpi.validade_final_promocao IS NULL OR tpi.validade_final_promocao>=$4::date)
-				    THEN tpi.preco_venda_promocao END,
-				  tpi.preco_venda)
+				SELECT tpi.preco_venda
 				FROM tabela_preco_item tpi
 				WHERE tpi.cod_tenant=$1 AND tpi.cod_empresa=$2
 				  AND tpi.codigo_erp_tabela_preco=$3 AND tpi.codigo_erp_item=$5

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
@@ -132,8 +133,13 @@ func (h *Handler) Clientes(w http.ResponseWriter, r *http.Request) {
 		bad(w, 400, "REQUISICAO_INVALIDA", "status deve ser ativo, inativo, prospect ou bloqueado.")
 		return
 	}
+	search := r.URL.Query().Get("busca")
+	if err := validSearch(search); err != nil {
+		bad(w, 400, "REQUISICAO_INVALIDA", err.Error())
+		return
+	}
 	items, next, err := h.Service.ClientesAPI(r.Context(), tenantID, empresaID,
-		r.URL.Query().Get("busca"), status, limit, cursor)
+		search, status, limit, cursor)
 	if err != nil {
 		writeServiceError(w, err, "Não foi possível listar clientes.")
 		return
@@ -204,6 +210,13 @@ func validPage(limitText, cursorText string) (int, int, error) {
 		cursor = value
 	}
 	return limit, cursor, nil
+}
+
+func validSearch(search string) error {
+	if utf8.RuneCountInString(search) > 100 {
+		return errors.New("busca deve ter no máximo 100 caracteres.")
+	}
+	return nil
 }
 
 func writeServiceError(w http.ResponseWriter, err error, internalMessage string) {

@@ -13,6 +13,12 @@ import (
 
 type Repository struct{}
 
+const clientSearchPredicate = `($4 = '' OR
+	public.unaccent_immutable(c.nome_razao_social) ILIKE public.unaccent_immutable('%' || $4 || '%')
+	OR public.unaccent_immutable(COALESCE(c.nome_fantasia, '')) ILIKE public.unaccent_immutable('%' || $4 || '%')
+	OR public.unaccent_immutable(COALESCE(c.cnpj_cpf, '')) ILIKE public.unaccent_immutable('%' || $4 || '%')
+	OR public.unaccent_immutable(c.codigo_erp::text) ILIKE public.unaccent_immutable('%' || $4 || '%'))`
+
 func NewRepository() *Repository {
 	return &Repository{}
 }
@@ -71,9 +77,7 @@ func (r *Repository) List(ctx context.Context, tx pgx.Tx, tenantID, empresaID in
 		  ORDER BY a.data_agendada DESC,a.codigo DESC LIMIT 1
 		) last_attendance ON true
 		WHERE c.cod_tenant=$1 AND c.cod_empresa=$2 AND c.deletado_em IS NULL AND c.codigo > $3
-		  AND ($4 = '' OR c.nome_razao_social ILIKE '%' || $4 || '%'
-		       OR COALESCE(c.nome_fantasia, '') ILIKE '%' || $4 || '%'
-		       OR COALESCE(c.cnpj_cpf, '') ILIKE '%' || $4 || '%')
+		  AND ` + clientSearchPredicate + `
 		  AND ($5 = '' OR
 		       ($5 = 'ativo' AND COALESCE(c.ativo,true) AND NOT COALESCE(c.prospect,false)
 		         AND NOT ((c.data_bloqueio IS NOT NULL AND c.data_bloqueio<=CURRENT_DATE)
@@ -83,7 +87,13 @@ func (r *Repository) List(ctx context.Context, tx pgx.Tx, tenantID, empresaID in
 		       ($5 = 'bloqueado' AND COALESCE(c.ativo,true)
 		         AND ((c.data_bloqueio IS NOT NULL AND c.data_bloqueio<=CURRENT_DATE)
 		           OR NULLIF(BTRIM(c.motivo_bloqueio),'') IS NOT NULL)))
-		ORDER BY c.codigo ASC LIMIT $6`
+		ORDER BY CASE
+		  WHEN $4 = '' THEN 0
+		  WHEN public.unaccent_immutable(c.nome_razao_social) ILIKE public.unaccent_immutable($4 || '%') THEN 0
+		  WHEN public.unaccent_immutable(COALESCE(c.nome_fantasia, '')) ILIKE public.unaccent_immutable($4 || '%') THEN 1
+		  WHEN public.unaccent_immutable(c.codigo_erp::text) ILIKE public.unaccent_immutable($4 || '%') THEN 2
+		  ELSE 3 END,
+		  c.codigo ASC LIMIT $6`
 	rows, err := tx.Query(ctx, query, tenantID, empresaID, cursor, search, status, limit+1)
 	if err != nil {
 		return nil, fmt.Errorf("listar clientes: %w", err)

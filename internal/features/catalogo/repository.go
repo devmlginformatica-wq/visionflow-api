@@ -79,6 +79,10 @@ func queryFor(resource string) (string, bool) {
 	return query, ok
 }
 
+const productSearchPredicate = `($2='' OR
+	public.unaccent_immutable(i.codigo_erp::text) ILIKE public.unaccent_immutable('%'||$2||'%')
+	OR public.unaccent_immutable(i.descricao) ILIKE public.unaccent_immutable('%'||$2||'%'))`
+
 var catalogQueries = map[string]string{
 	"empresas": `SELECT e.cod_empresa AS id, COALESCE(e.nome_fantasia, e.razao_social) AS nome
 		FROM empresa e JOIN usuario_empresa ue ON ue.cod_tenant=e.cod_tenant
@@ -167,7 +171,12 @@ var catalogQueries = map[string]string{
 		  LIMIT 1
 		) selected_price ON true
 		WHERE i.codigo > $1 AND COALESCE(i.ativo, true)
-		  AND ($2='' OR i.codigo_erp ILIKE '%'||$2||'%' OR i.descricao ILIKE '%'||$2||'%')
+		  AND ` + productSearchPredicate + `
 		  AND i.cod_tenant=$4 AND i.cod_empresa=$5
-		ORDER BY i.codigo LIMIT $3`,
+		ORDER BY CASE
+		  WHEN $2='' THEN 0
+		  WHEN public.unaccent_immutable(i.descricao) ILIKE public.unaccent_immutable($2||'%') THEN 0
+		  WHEN public.unaccent_immutable(i.codigo_erp::text) ILIKE public.unaccent_immutable($2||'%') THEN 1
+		  ELSE 2 END,
+		  i.codigo LIMIT $3`,
 }

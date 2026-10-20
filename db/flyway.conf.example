@@ -11,6 +11,7 @@ flyway.url=jdbc:postgresql://localhost:5432/epare_forca_de_vendas
 flyway.user=epare
 flyway.password=TROCAR_PELA_SUA_SENHA
 flyway.schemas=public
+flyway.postgresql.transactional.lock=false
 
 flyway.locations=filesystem:./db/migrations
 
