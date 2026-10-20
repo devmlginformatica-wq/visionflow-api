@@ -20,6 +20,7 @@ import (
 var ErrInvalidCredentials = auth.ErrInvalidCredentials
 var ErrInvalidInput = apperrors.ErrInvalidInput
 var ErrDuplicateResource = apperrors.ErrDuplicateResource
+var ErrIntegrationLocked = apperrors.ErrIntegrationLocked
 var ErrInvalidCustomer = errors.New("cliente inválido")
 
 func InvalidInput(message string) error {

@@ -451,7 +451,8 @@ func (h *Handler) RemoverPedido(w http.ResponseWriter, r *http.Request) {
 
 func validPedidoStatus(status string) bool {
 	switch status {
-	case "em_digitacao", "aguardando_aprovacao", "aprovado", "cancelado":
+	case "em_digitacao", "em_integracao", "integrado", "erro_integracao",
+		"aguardando_aprovacao", "aprovado", "cancelado":
 		return true
 	default:
 		return false

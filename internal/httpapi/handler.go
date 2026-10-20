@@ -220,6 +220,10 @@ func validSearch(search string) error {
 }
 
 func writeServiceError(w http.ResponseWriter, err error, internalMessage string) {
+	if errors.Is(err, service.ErrIntegrationLocked) {
+		bad(w, http.StatusConflict, "INTEGRACAO_BLOQUEADA", err.Error())
+		return
+	}
 	if errors.Is(err, service.ErrInvalidInput) {
 		message := strings.TrimPrefix(err.Error(), service.ErrInvalidInput.Error()+": ")
 		bad(w, http.StatusBadRequest, "REQUISICAO_INVALIDA", message)

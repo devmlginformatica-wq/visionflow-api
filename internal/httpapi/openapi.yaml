@@ -38,6 +38,8 @@ tags:
     description: Pedidos de venda
   - name: orcamentos
     description: Orçamentos (mesma estrutura do pedido, flag `e_um_orcamento`)
+  - name: integracao
+    description: Fila de integração e retorno do ERP
   - name: catalogo
     description: Catálogos auxiliares (read-only)
   - name: agenda
@@ -488,13 +490,18 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
 
     put:
       tags: [clientes]
       summary: Atualizar cliente
-      description: Atualiza os campos do cliente sem alterar `codigo_erp`.
+      description: |
+        Atualiza os campos do cliente sem alterar `codigo_erp`. A edição é bloqueada
+        enquanto o cadastro está em integração ou já foi integrado; rejeições do ERP
+        podem ser corrigidas e reenviadas.
       requestBody:
         required: true
         content:
@@ -514,11 +521,13 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
     delete:
       tags: [clientes]
       summary: Remover cliente
-      description: Soft delete; o registro recebe `deletado_em` e deixa de aparecer nas consultas.
+      description: Soft delete; bloqueado enquanto o cadastro estiver em integração ou já integrado.
       responses:
         '200':
           description: Cliente removido
@@ -530,6 +539,29 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /clientes/{id}/finalizar:
+    parameters:
+      - $ref: '#/components/parameters/IdPathParam'
+    post:
+      tags: [clientes]
+      summary: Enviar cliente para integração
+      description: |
+        Finaliza o cadastro e o coloca na fila do ERP. Clientes em `erro_integracao`
+        podem ser corrigidos e reenviados; clientes já em integração ou integrados são bloqueados.
+      responses:
+        '202':
+          description: Cliente enviado à fila
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   /clientes/cnpj/{cnpj}:
     get:
@@ -900,9 +932,9 @@ paths:
       tags: [pedidos]
       summary: Atualizar pedido
       description: |
-        Substitui os itens do pedido dentro de uma transação. A edição é permitida
-        em qualquer situação, inclusive aprovado; se o ERP já processou o pedido,
-        a alteração não será propagada.
+        Substitui os itens do pedido dentro de uma transação. A edição é bloqueada
+        enquanto o pedido está em integração ou já foi integrado. Cadastros rejeitados
+        pelo ERP podem ser corrigidos e reenviados.
       requestBody:
         required: true
         content:
@@ -922,6 +954,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
     delete:
       tags: [pedidos]
@@ -938,6 +972,26 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /pedidos/{id}/finalizar:
+    parameters:
+      - $ref: '#/components/parameters/IdPathParam'
+    post:
+      tags: [pedidos]
+      summary: Enviar pedido para integração
+      responses:
+        '202':
+          description: Pedido enviado à fila
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   # ═══════════════════════════════════════════════════════════
   # ORÇAMENTOS
@@ -986,6 +1040,97 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /orcamentos/{id}/finalizar:
+    parameters:
+      - $ref: '#/components/parameters/IdPathParam'
+    post:
+      tags: [orcamentos]
+      summary: Enviar orçamento para integração
+      responses:
+        '202':
+          description: Orçamento enviado à fila
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /integracao/{entidade}/pendentes:
+    get:
+      tags: [integracao]
+      summary: Buscar cadastros pendentes para o ERP
+      description: |
+        Retorna cadastros da empresa autenticada que aguardam integração. O ERP
+        deve guardar `integracao_id` e enviá-lo no callback para associar o retorno
+        à tentativa correta. A leitura é repetível até a confirmação do callback.
+      parameters:
+        - name: entidade
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [pedido, orcamento, cliente]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 100
+      responses:
+        '200':
+          description: Cadastros aguardando processamento
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegracaoPendenteEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /integracao/{entidade}/{id}/retorno:
+    parameters:
+      - $ref: '#/components/parameters/IdPathParam'
+      - name: entidade
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [pedido, orcamento, cliente]
+    post:
+      tags: [integracao]
+      summary: Registrar retorno do ERP
+      description: |
+        Callback idempotente para a tentativa indicada por `integracao_id`.
+        Sucesso exige `codigo_erp`; rejeição exige `motivo_rejeicao`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegracaoRetorno'
+      responses:
+        '200':
+          description: Retorno aplicado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   # ═══════════════════════════════════════════════════════════
   # CATÁLOGOS
@@ -1472,7 +1617,7 @@ components:
                   message: Recurso não encontrado.
 
     Conflict:
-      description: Conflito (recurso duplicado, etc)
+      description: Recurso duplicado ou cadastro bloqueado pela integração ERP
       content:
         application/json:
           schema:
@@ -1815,7 +1960,12 @@ components:
             id:
               type: integer
             codigo_erp:
+              type: [string, 'null']
+            status_integracao:
               type: string
+              enum: [em_digitacao, em_integracao, integrado, erro_integracao]
+            motivo_rejeicao:
+              type: [string, 'null']
             ativo:
               type: boolean
             situacao_cadastro:
@@ -1861,12 +2011,17 @@ components:
 
     Cliente:
       type: object
-      required: [id, codigo_erp, nome_razao_social]
+      required: [id, nome_razao_social, status_integracao]
       properties:
         id:
           type: integer
         codigo_erp:
+          type: [string, 'null']
+        status_integracao:
           type: string
+          enum: [em_digitacao, em_integracao, integrado, erro_integracao]
+        motivo_rejeicao:
+          type: [string, 'null']
         nome_razao_social:
           type: string
         nome_fantasia:
@@ -2112,10 +2267,13 @@ components:
 
     PedidoStatus:
       type: string
-      enum: [em_digitacao, aguardando_aprovacao, aprovado, cancelado]
+      enum: [em_digitacao, em_integracao, integrado, erro_integracao, aguardando_aprovacao, aprovado, cancelado]
       description: |
         Fase do pedido no app (`pedido.situacao_app`).
         - em_digitacao: em digitação pelo vendedor
+        - em_integracao: aguardando processamento pelo ERP
+        - integrado: aceito pelo ERP; edição bloqueada
+        - erro_integracao: rejeitado pelo ERP; permite correção e reenvio
         - aguardando_aprovacao: aguardando aprovação do supervisor
         - aprovado: aprovado
         - cancelado: cancelado
@@ -2354,7 +2512,8 @@ components:
         - $ref: '#/components/schemas/Pedido'
         - type: object
           properties:
-            codigo_erp: { type: string }
+            codigo_erp: { type: [string, 'null'] }
+            motivo_rejeicao: { type: [string, 'null'] }
             numero_cliente: { type: string }
             cliente:
               type: object
@@ -2410,6 +2569,48 @@ components:
                 $ref: '#/components/schemas/ItemPedido'
             totais:
               $ref: '#/components/schemas/PedidoTotais'
+
+    IntegracaoRetorno:
+      type: object
+      required: [integracao_id, sucesso]
+      properties:
+        integracao_id:
+          type: integer
+          format: int64
+          minimum: 1
+        sucesso:
+          type: boolean
+        codigo_erp:
+          type: [string, 'null']
+          maxLength: 20
+        motivo_rejeicao:
+          type: [string, 'null']
+
+    IntegracaoPendente:
+      type: object
+      required: [integracao_id, entidade, entidade_id, tentativa, data_envio, dados]
+      properties:
+        integracao_id: { type: integer, format: int64 }
+        entidade: { type: string, enum: [pedido, orcamento, cliente] }
+        entidade_id: { type: integer }
+        tentativa: { type: integer, minimum: 1 }
+        data_envio: { type: string, format: date-time }
+        dados:
+          type: object
+          additionalProperties: true
+
+    IntegracaoPendenteEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/APIResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/IntegracaoPendente'
 
     PedidoDetalheEnvelope:
       allOf:

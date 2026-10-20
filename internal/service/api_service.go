@@ -12,6 +12,7 @@ import (
 
 	"github.com/celsolenonsander/visionflow-api/internal/db"
 	"github.com/celsolenonsander/visionflow-api/internal/models"
+	"github.com/celsolenonsander/visionflow-api/internal/platform/apperrors"
 )
 
 const defaultPageSize = 20
@@ -21,6 +22,30 @@ func pedidoAddressCode(identification sql.NullString, erpCode string) string {
 		return erpCode
 	}
 	return identification.String
+}
+
+func nullableInt(value any) *int {
+	var id int
+	switch typed := value.(type) {
+	case int:
+		id = typed
+	case int32:
+		id = int(typed)
+	case int64:
+		id = int(typed)
+	case string:
+		parsed, err := strconv.Atoi(typed)
+		if err != nil {
+			return nil
+		}
+		id = parsed
+	default:
+		return nil
+	}
+	if id <= 0 {
+		return nil
+	}
+	return &id
 }
 
 type pedidoAddress struct {
@@ -138,9 +163,11 @@ func (s *Service) PedidosListarAPI(ctx context.Context, tenantID, empresaID int,
 			       COALESCE(SUM(pi.valor_total_produtos_liquido),0) AS total_liquido
 			FROM pedido p
 			LEFT JOIN cliente c ON c.cod_tenant=p.cod_tenant AND c.cod_empresa=p.cod_empresa
-			  AND c.codigo_erp=p.codigo_erp_cliente
+			  AND (c.codigo=p.cliente_id OR
+			       (p.cliente_id IS NULL AND c.codigo_erp=p.codigo_erp_cliente))
 			LEFT JOIN pedido_item pi ON pi.cod_tenant=p.cod_tenant AND pi.cod_empresa=p.cod_empresa
-			  AND pi.codigo_erp_pedido=p.codigo_erp
+			  AND (pi.pedido_id=p.codigo OR
+			       (pi.pedido_id IS NULL AND pi.codigo_erp_pedido=p.codigo_erp))
 			WHERE p.codigo > $1 AND p.e_um_orcamento=$2
 			  AND ($3='' OR p.situacao_app=$3)
 			  AND ($4::integer IS NULL OR c.codigo=$4)
@@ -180,10 +207,13 @@ func pedidoDetalhe(ctx context.Context, tx pgx.Tx, tenantID, empresaID, id int) 
 		       p.endereco_ident_faturamento AS _endereco_ident_faturamento,
 		       p.endereco_ident_entrega AS _endereco_ident_entrega,
 		       p.endereco_ident_cobranca AS _endereco_ident_cobranca,
+		       p.endereco_faturamento_local_id AS _endereco_faturamento_local_id,
+		       p.endereco_entrega_local_id AS _endereco_entrega_local_id,
+		       p.endereco_cobranca_local_id AS _endereco_cobranca_local_id,
 		       COALESCE(p.nosso_codigo_pedido,p.codigo_erp) AS numero,
 		       p.nro_pedido_cliente AS numero_cliente,
 		       CASE WHEN p.e_um_orcamento THEN 'orcamento' ELSE 'pedido' END AS tipo,
-		       p.situacao_app AS status,p.situacao_pedido AS status_erp,
+		       p.situacao_app AS status,p.motivo_rejeicao,p.situacao_pedido AS status_erp,
 		       CASE p.situacao_pedido
 		         WHEN '1' THEN 'Aberto' WHEN '2' THEN 'Cancelado' WHEN '3' THEN 'Faturado Total'
 		         WHEN '4' THEN 'Expedido' WHEN '5' THEN 'Entregue'
@@ -202,7 +232,8 @@ func pedidoDetalhe(ctx context.Context, tx pgx.Tx, tenantID, empresaID, id int) 
 		       tr.codigo AS transportadora_id,tr.nome_razao AS transportadora_nome
 		FROM pedido p
 		LEFT JOIN cliente c ON c.cod_tenant=p.cod_tenant AND c.cod_empresa=p.cod_empresa
-		  AND c.codigo_erp=p.codigo_erp_cliente
+		  AND (c.codigo=p.cliente_id OR
+		       (p.cliente_id IS NULL AND c.codigo_erp=p.codigo_erp_cliente))
 		LEFT JOIN empresa e ON e.cod_tenant=p.cod_tenant AND e.cod_empresa=p.cod_empresa
 		LEFT JOIN condicao_pagamento cp ON cp.cod_tenant=p.cod_tenant AND cp.cod_empresa=p.cod_empresa
 		  AND cp.codigo_erp=p.codigo_erp_condicao_pagamento
@@ -242,14 +273,16 @@ func pedidoDetalhe(ctx context.Context, tx pgx.Tx, tenantID, empresaID, id int) 
 	if err := customerERP.Scan(order["_codigo_erp_cliente"]); err != nil {
 		return nil, fmt.Errorf("ler cliente ERP do pedido: %w", err)
 	}
-	if customerERP.Valid {
+	customerID := nullableInt(order["cliente_id"])
+	if customerID != nil {
 		addressRows, err := tx.Query(ctx, `
-			SELECT cod_tenant,cod_empresa,codigo_erp_cliente,codigo,
-			       identificacao_endereco,codigo_erp_endereco
+			SELECT cod_tenant,cod_empresa,COALESCE(codigo_erp_cliente,''),codigo,
+			       identificacao_endereco,COALESCE(codigo_erp_endereco,'')
 			FROM cliente_endereco_adicional
-			WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo_erp_cliente=$3
+			WHERE cod_tenant=$1 AND cod_empresa=$2
+			  AND (cliente_id=$3 OR (cliente_id IS NULL AND codigo_erp_cliente=$4))
 			  AND deletado_em IS NULL`,
-			tenantID, empresaID, customerERP.String)
+			tenantID, empresaID, *customerID, customerERP.String)
 		if err != nil {
 			return nil, fmt.Errorf("consultar endereços do pedido: %w", err)
 		}
@@ -272,6 +305,13 @@ func pedidoDetalhe(ctx context.Context, tx pgx.Tx, tenantID, empresaID, id int) 
 	}
 	addressIDs := pedidoAddressIDs(addressCodes, addresses, tenantID, empresaID, customerERP.String)
 	for index, key := range []string{
+		"_endereco_faturamento_local_id", "_endereco_entrega_local_id", "_endereco_cobranca_local_id",
+	} {
+		if localID := nullableInt(order[key]); localID != nil {
+			addressIDs[index] = localID
+		}
+	}
+	for index, key := range []string{
 		"endereco_faturamento_id", "endereco_entrega_id", "endereco_cobranca_id",
 	} {
 		order[key] = addressIDs[index]
@@ -279,6 +319,7 @@ func pedidoDetalhe(ctx context.Context, tx pgx.Tx, tenantID, empresaID, id int) 
 	for _, key := range []string{
 		"_codigo_erp_cliente",
 		"_endereco_ident_faturamento", "_endereco_ident_entrega", "_endereco_ident_cobranca",
+		"_endereco_faturamento_local_id", "_endereco_entrega_local_id", "_endereco_cobranca_local_id",
 	} {
 		delete(order, key)
 	}
@@ -316,7 +357,7 @@ func pedidoDetalhe(ctx context.Context, tx pgx.Tx, tenantID, empresaID, id int) 
 		delete(order, reference.name)
 	}
 
-	items, err := pedidoItens(ctx, tx, fmt.Sprint(order["codigo_erp"]))
+	items, err := pedidoItens(ctx, tx, tenantID, empresaID, id, fmt.Sprint(order["codigo_erp"]))
 	if err != nil {
 		return nil, err
 	}
@@ -331,9 +372,10 @@ func pedidoDetalhe(ctx context.Context, tx pgx.Tx, tenantID, empresaID, id int) 
 	return order, nil
 }
 
-func pedidoItens(ctx context.Context, tx pgx.Tx, codigoErpPedido string) ([]map[string]any, error) {
+func pedidoItens(ctx context.Context, tx pgx.Tx, tenantID, empresaID, pedidoID int, codigoErpPedido string) ([]map[string]any, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT pi.codigo AS id,COALESCE(NULLIF(pi.codigo_erp_item_pedido,''),'0') AS sequence,
+		SELECT pi.codigo AS id,COALESCE(NULLIF(pi.nosso_codigo_item_pedido,''),
+		       NULLIF(pi.codigo_erp_item_pedido,''),'0') AS sequence,
 		       i.codigo AS product_id,i.codigo_erp AS product_codigo_erp,i.descricao AS product_descricao,
 		       COALESCE(i.descricao_categoria_nivel1,i.descricao_categoria_nivel2,i.descricao_categoria_nivel3) AS product_familia,
 		       i.apelido_fantasia_fabricante AS product_marca,u.sigla AS product_unidade,
@@ -365,7 +407,7 @@ func pedidoItens(ctx context.Context, tx pgx.Tx, codigoErpPedido string) ([]map[
 		           'YYYY-MM-DD"T"HH24:MI:SS"Z"') END AS price_table_validity
 		FROM pedido_item pi
 		LEFT JOIN pedido p ON p.cod_tenant=pi.cod_tenant AND p.cod_empresa=pi.cod_empresa
-		  AND p.codigo_erp=pi.codigo_erp_pedido
+		  AND (p.codigo=pi.pedido_id OR (pi.pedido_id IS NULL AND p.codigo_erp=pi.codigo_erp_pedido))
 		LEFT JOIN item i ON i.cod_tenant=pi.cod_tenant AND i.cod_empresa=pi.cod_empresa
 		  AND i.codigo_erp=pi.codigo_erp_produto
 		LEFT JOIN unidade_medida u ON u.cod_tenant=i.cod_tenant AND u.cod_empresa=i.cod_empresa
@@ -384,8 +426,10 @@ func pedidoItens(ctx context.Context, tx pgx.Tx, codigoErpPedido string) ([]map[
 		         OR tpi.validade_final>=p.data_emissao)
 		  ORDER BY tpi.validade_inicial DESC NULLS LAST LIMIT 1
 		) validity ON true
-		WHERE pi.codigo_erp_pedido=$1
-		ORDER BY pi.codigo_erp_item_pedido,pi.codigo`, codigoErpPedido)
+		WHERE pi.cod_tenant=$1 AND pi.cod_empresa=$2
+		  AND (pi.pedido_id=$3 OR (pi.pedido_id IS NULL AND pi.codigo_erp_pedido=$4))
+		ORDER BY COALESCE(pi.nosso_codigo_item_pedido,pi.codigo_erp_item_pedido),pi.codigo`,
+		tenantID, empresaID, pedidoID, codigoErpPedido)
 	if err != nil {
 		return nil, fmt.Errorf("consultar itens do pedido: %w", err)
 	}
@@ -482,7 +526,7 @@ func resolveERPCode(ctx context.Context, tx pgx.Tx, table string, id *int) (*str
 	if !allowed[table] {
 		return nil, fmt.Errorf("referência não suportada: %s", table)
 	}
-	var code string
+	var code sql.NullString
 	query := fmt.Sprintf("SELECT codigo_erp FROM %s WHERE codigo=$1 AND COALESCE(ativo,true)", table)
 	if table == "cliente" {
 		query += " AND deletado_em IS NULL"
@@ -491,7 +535,10 @@ func resolveERPCode(ctx context.Context, tx pgx.Tx, table string, id *int) (*str
 	if err != nil {
 		return nil, err
 	}
-	return &code, nil
+	if !code.Valid {
+		return nil, nil
+	}
+	return &code.String, nil
 }
 
 func preparePedido(input models.PedidoCreate, empresaID int) (models.PedidoCreate, time.Time, *time.Time, string, error) {
@@ -558,16 +605,7 @@ func preparePedido(input models.PedidoCreate, empresaID int) (models.PedidoCreat
 		}
 		delivery = &parsed
 	}
-	status := "em_digitacao"
-	if input.Status != nil {
-		status = *input.Status
-	}
-	switch status {
-	case "em_digitacao", "aguardando_aprovacao", "aprovado", "cancelado":
-	default:
-		return input, time.Time{}, nil, "", InvalidInput("status inválido")
-	}
-	return input, emission, delivery, status, nil
+	return input, emission, delivery, "em_digitacao", nil
 }
 
 func (s *Service) CriarPedido(ctx context.Context, tenantID, empresaID int, input models.PedidoCreate) (map[string]any, error) {
@@ -603,50 +641,52 @@ func (s *Service) CriarPedido(ctx context.Context, tenantID, empresaID int, inpu
 			return fmt.Errorf("transportadora não encontrada: %w", err)
 		}
 		addressCodes := make([]*string, 3)
+		localAddressIDs := make([]*int, 3)
 		for i, addressID := range []*int{input.EnderecoFaturamentoID, input.EnderecoEntregaID, input.EnderecoCobrancaID} {
 			if addressID == nil {
 				continue
 			}
-			if customerCode == nil {
-				return InvalidInput("endereços de pedido exigem cliente_id")
-			}
 			var identification sql.NullString
-			var erpCode string
+			var erpCode sql.NullString
 			if err := tx.QueryRow(ctx, `SELECT e.identificacao_endereco, e.codigo_erp_endereco
 				FROM cliente_endereco_adicional e
 				WHERE e.cod_tenant=$1 AND e.cod_empresa=$2 AND e.codigo=$3
-				  AND e.codigo_erp_cliente=$4 AND e.deletado_em IS NULL`,
-				tenantID, empresaID, *addressID, *customerCode).Scan(&identification, &erpCode); err != nil {
+				  AND (e.cliente_id=$4 OR (e.cliente_id IS NULL AND e.codigo_erp_cliente=$5))
+				  AND e.deletado_em IS NULL`,
+				tenantID, empresaID, *addressID, *input.ClienteID, customerCode).Scan(&identification, &erpCode); err != nil {
 				return fmt.Errorf("endereço do cliente não encontrado: %w", err)
 			}
-			code := pedidoAddressCode(identification, erpCode)
-			addressCodes[i] = &code
+			if identification.Valid || erpCode.Valid {
+				code := pedidoAddressCode(identification, erpCode.String)
+				addressCodes[i] = &code
+			}
+			localAddressIDs[i] = addressID
 		}
 		var orderID int
 		if err := tx.QueryRow(ctx, "SELECT nextval('public.pedido_codigo_seq')").Scan(&orderID); err != nil {
 			return fmt.Errorf("gerar identificador do pedido: %w", err)
 		}
-		orderERP := fmt.Sprintf("API-%d", orderID)
 		orderNumber := strconv.Itoa(orderID)
 		_, err = tx.Exec(ctx, `
 			INSERT INTO pedido (
-				cod_tenant,cod_empresa,codigo,codigo_erp,nosso_codigo_pedido,nro_pedido_cliente,
-				e_um_orcamento,data_emissao,data_entrega,codigo_erp_cliente,cliente_cnpj_cpf,
+				cod_tenant,cod_empresa,codigo,nosso_codigo_pedido,nro_pedido_cliente,
+				e_um_orcamento,data_emissao,data_entrega,cliente_id,codigo_erp_cliente,cliente_cnpj_cpf,
 				codigo_erp_condicao_pagamento,codigo_erp_forma_pagamento,codigo_erp_transportadora,
 				endereco_ident_faturamento,endereco_ident_entrega,endereco_ident_cobranca,
+				endereco_faturamento_local_id,endereco_entrega_local_id,endereco_cobranca_local_id,
 				valor_frete,observacoes_pedido,observacoes_nota_fiscal,situacao_app
 			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-				(SELECT cnpj_cpf FROM cliente WHERE codigo=$11),
-				$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
-			tenantID, empresaID, orderID, orderERP, orderNumber, input.NumeroCliente,
-			input.Tipo == "orcamento", emissao, orderDelivery, customerCode, input.ClienteID,
+				(SELECT cnpj_cpf FROM cliente WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$9),
+				$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+			tenantID, empresaID, orderID, orderNumber, input.NumeroCliente,
+			input.Tipo == "orcamento", emissao, orderDelivery, *input.ClienteID, customerCode,
 			conditionCode, methodCode, carrierCode, addressCodes[0], addressCodes[1],
-			addressCodes[2], input.ValorFrete, input.ObservacoesPedido,
-			input.ObservacoesNotaFiscal, status)
+			addressCodes[2], localAddressIDs[0], localAddressIDs[1], localAddressIDs[2],
+			input.ValorFrete, input.ObservacoesPedido, input.ObservacoesNotaFiscal, status)
 		if err != nil {
 			return fmt.Errorf("criar pedido: %w", err)
 		}
-		if err := insertPedidoItems(ctx, tx, tenantID, empresaID, orderERP, customerCode, emissao, input.Itens, orderDelivery); err != nil {
+		if err := insertPedidoItems(ctx, tx, tenantID, empresaID, orderID, input.ClienteID, emissao, input.Itens, orderDelivery); err != nil {
 			return err
 		}
 		result, err = pedidoDetalhe(ctx, tx, tenantID, empresaID, orderID)
@@ -659,22 +699,22 @@ func (s *Service) CriarPedido(ctx context.Context, tenantID, empresaID int, inpu
 // Se o ERP já processou o pedido, a alteração não será propagada.
 // TODO: revisar política de edição após integração com o ERP.
 func (s *Service) AtualizarPedido(ctx context.Context, tenantID, empresaID, id int, input models.PedidoCreate) (map[string]any, error) {
-	statusProvided := input.Status != nil
-	input, emission, orderDelivery, status, err := preparePedido(input, empresaID)
+	input, emission, orderDelivery, _, err := preparePedido(input, empresaID)
 	if err != nil {
 		return nil, err
 	}
 	var result map[string]any
 	err = s.withSession(ctx, tenantID, empresaID, func(tx pgx.Tx) error {
-		var orderERP, existingStatus string
+		var orderERP sql.NullString
+		var existingStatus string
 		if err := tx.QueryRow(ctx, `SELECT codigo_erp,situacao_app FROM pedido
 			WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3
-			  AND COALESCE(apagar_dados_pedido,false)=false`,
-			tenantID, empresaID, id).Scan(&orderERP, &existingStatus); err != nil {
+			  AND COALESCE(apagar_dados_pedido,false)=false
+			FOR UPDATE`, tenantID, empresaID, id).Scan(&orderERP, &existingStatus); err != nil {
 			return err
 		}
-		if !statusProvided {
-			status = existingStatus
+		if existingStatus == "em_integracao" || existingStatus == "integrado" {
+			return apperrors.ErrIntegrationLocked
 		}
 		customerCode, err := resolveERPCode(ctx, tx, "cliente", input.ClienteID)
 		if err != nil {
@@ -702,6 +742,7 @@ func (s *Service) AtualizarPedido(ctx context.Context, tenantID, empresaID, id i
 			return fmt.Errorf("transportadora não encontrada: %w", err)
 		}
 		addressCodes := make([]*string, 3)
+		localAddressIDs := make([]*int, 3)
 		for index, addressID := range []*int{
 			input.EnderecoFaturamentoID, input.EnderecoEntregaID, input.EnderecoCobrancaID,
 		} {
@@ -709,42 +750,51 @@ func (s *Service) AtualizarPedido(ctx context.Context, tenantID, empresaID, id i
 				continue
 			}
 			var identification sql.NullString
-			var erpCode string
+			var erpCode sql.NullString
 			if err := tx.QueryRow(ctx, `SELECT identificacao_endereco, codigo_erp_endereco
 				FROM cliente_endereco_adicional
 				WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3
-				  AND codigo_erp_cliente=$4 AND deletado_em IS NULL`,
-				tenantID, empresaID, *addressID, *customerCode).Scan(&identification, &erpCode); err != nil {
+				  AND (cliente_id=$4 OR (cliente_id IS NULL AND codigo_erp_cliente=$5))
+				  AND deletado_em IS NULL`,
+				tenantID, empresaID, *addressID, *input.ClienteID, customerCode).Scan(&identification, &erpCode); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return InvalidInput("endereço do cliente inválido")
 				}
 				return fmt.Errorf("validar endereço do pedido: %w", err)
 			}
-			code := pedidoAddressCode(identification, erpCode)
-			addressCodes[index] = &code
+			if identification.Valid || erpCode.Valid {
+				code := pedidoAddressCode(identification, erpCode.String)
+				addressCodes[index] = &code
+			}
+			localAddressIDs[index] = addressID
 		}
 		_, err = tx.Exec(ctx, `UPDATE pedido SET
-			nro_pedido_cliente=$4,e_um_orcamento=$5,data_emissao=$6,data_entrega=$7,codigo_erp_cliente=$8,
-			cliente_cnpj_cpf=(SELECT cnpj_cpf FROM cliente WHERE codigo=$9),
-			codigo_erp_condicao_pagamento=$10,codigo_erp_forma_pagamento=$11,
-			codigo_erp_transportadora=$12,endereco_ident_faturamento=$13,
-			endereco_ident_entrega=$14,endereco_ident_cobranca=$15,valor_frete=$16,
-			observacoes_pedido=$17,observacoes_nota_fiscal=$18,
-			situacao_app=CASE WHEN $19 THEN $20 ELSE situacao_app END
+			nro_pedido_cliente=$4,e_um_orcamento=$5,data_emissao=$6,data_entrega=$7,
+			cliente_id=$8,codigo_erp_cliente=$9,
+			cliente_cnpj_cpf=(SELECT cnpj_cpf FROM cliente
+				WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$10),
+			codigo_erp_condicao_pagamento=$11,codigo_erp_forma_pagamento=$12,
+			codigo_erp_transportadora=$13,endereco_ident_faturamento=$14,
+			endereco_ident_entrega=$15,endereco_ident_cobranca=$16,
+			endereco_faturamento_local_id=$17,endereco_entrega_local_id=$18,
+			endereco_cobranca_local_id=$19,valor_frete=$20,
+			observacoes_pedido=$21,observacoes_nota_fiscal=$22
 			WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3`,
 			tenantID, empresaID, id, input.NumeroCliente, input.Tipo == "orcamento", emission,
-			orderDelivery, customerCode, *input.ClienteID, conditionCode, methodCode, carrierCode,
-			addressCodes[0], addressCodes[1], addressCodes[2], input.ValorFrete,
-			input.ObservacoesPedido, input.ObservacoesNotaFiscal, statusProvided, status)
+			orderDelivery, *input.ClienteID, customerCode, *input.ClienteID, conditionCode, methodCode,
+			carrierCode, addressCodes[0], addressCodes[1], addressCodes[2], localAddressIDs[0],
+			localAddressIDs[1], localAddressIDs[2], input.ValorFrete,
+			input.ObservacoesPedido, input.ObservacoesNotaFiscal)
 		if err != nil {
 			return fmt.Errorf("atualizar pedido: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM pedido_item
-			WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo_erp_pedido=$3`,
-			tenantID, empresaID, orderERP); err != nil {
+			WHERE cod_tenant=$1 AND cod_empresa=$2
+			  AND (pedido_id=$3 OR (pedido_id IS NULL AND codigo_erp_pedido=$4))`,
+			tenantID, empresaID, id, orderERP.String); err != nil {
 			return fmt.Errorf("substituir itens do pedido: %w", err)
 		}
-		if err := insertPedidoItems(ctx, tx, tenantID, empresaID, orderERP, customerCode, emission, input.Itens, orderDelivery); err != nil {
+		if err := insertPedidoItems(ctx, tx, tenantID, empresaID, id, input.ClienteID, emission, input.Itens, orderDelivery); err != nil {
 			return err
 		}
 		result, err = pedidoDetalhe(ctx, tx, tenantID, empresaID, id)
@@ -753,7 +803,7 @@ func (s *Service) AtualizarPedido(ctx context.Context, tenantID, empresaID, id i
 	return result, err
 }
 
-func insertPedidoItems(ctx context.Context, tx pgx.Tx, tenantID, empresaID int, orderERP string, customerERP *string, emission time.Time, items []models.PedidoItemInput, orderDelivery *time.Time) error {
+func insertPedidoItems(ctx context.Context, tx pgx.Tx, tenantID, empresaID, pedidoID int, customerID *int, emission time.Time, items []models.PedidoItemInput, orderDelivery *time.Time) error {
 	sequences := make(map[int]struct{}, len(items))
 	for index, item := range items {
 		if item.Sequence <= 0 || item.QuantidadeInformada <= 0 ||
@@ -800,11 +850,11 @@ func insertPedidoItems(ctx context.Context, tx pgx.Tx, tenantID, empresaID int, 
 				JOIN item i ON i.cod_tenant=tp.cod_tenant AND i.cod_empresa=tp.cod_empresa
 				  AND i.codigo_erp=$3
 				LEFT JOIN cliente c ON c.cod_tenant=tp.cod_tenant AND c.cod_empresa=tp.cod_empresa
-				  AND c.codigo_erp=$4 AND c.deletado_em IS NULL
+				  AND c.codigo=$4 AND c.deletado_em IS NULL
 				WHERE tp.cod_tenant=$1 AND tp.cod_empresa=$2 AND COALESCE(tp.ativo,true)
 				  AND tp.codigo_erp=COALESCE(NULLIF(c.codigo_erp_tabela_preco,''),
 				    i.codigo_integracao_tabela_preco)
-				LIMIT 1`, tenantID, empresaID, productCode, customerERP).Scan(&defaultCode)
+				LIMIT 1`, tenantID, empresaID, productCode, customerID).Scan(&defaultCode)
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("resolver tabela de preço do item: %w", err)
 			}
@@ -863,12 +913,12 @@ func insertPedidoItems(ctx context.Context, tx pgx.Tx, tenantID, empresaID int, 
 		}
 		_, err = tx.Exec(ctx, `
 			INSERT INTO pedido_item (
-				cod_tenant,cod_empresa,codigo_erp_pedido,codigo_erp_item_pedido,
+				cod_tenant,cod_empresa,pedido_id,nosso_codigo_item_pedido,
 				codigo_erp_produto,codigo_erp_tabela_preco,preco_venda_original_sugerido,
 				preco_venda_praticado_digitado,quantidade_informada,
 				valor_desconto_comercial,valor_total_produtos_liquido,data_entrega,observacao_item,codigo_cliente
 			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-			tenantID, empresaID, orderERP, strconv.Itoa(item.Sequence), productCode,
+			tenantID, empresaID, pedidoID, strconv.Itoa(item.Sequence), productCode,
 			priceCode, item.OriginalPrice, item.SalePrice, item.QuantidadeInformada,
 			item.ValorDescontoComercial, total, dataEntrega, item.ObservacaoItem, item.CodigoCliente)
 		if err != nil {
@@ -883,11 +933,22 @@ func (s *Service) RemoverPedido(ctx context.Context, tenantID, empresaID, id int
 		tag, err := tx.Exec(ctx, `UPDATE pedido SET situacao_app='cancelado'
 			WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3
 			  AND COALESCE(apagar_dados_pedido,false)=false
-			  AND situacao_app <> 'cancelado'`, tenantID, empresaID, id)
+			  AND situacao_app NOT IN ('cancelado','em_integracao','integrado')`, tenantID, empresaID, id)
 		if err != nil {
 			return fmt.Errorf("cancelar pedido: %w", err)
 		}
 		if tag.RowsAffected() == 0 {
+			var status string
+			statusErr := tx.QueryRow(ctx, `SELECT situacao_app FROM pedido
+				WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3
+				  AND COALESCE(apagar_dados_pedido,false)=false`,
+				tenantID, empresaID, id).Scan(&status)
+			if statusErr == nil && (status == "em_integracao" || status == "integrado") {
+				return apperrors.ErrIntegrationLocked
+			}
+			if statusErr != nil && statusErr != pgx.ErrNoRows {
+				return fmt.Errorf("consultar situação do pedido: %w", statusErr)
+			}
 			return pgx.ErrNoRows
 		}
 		return nil

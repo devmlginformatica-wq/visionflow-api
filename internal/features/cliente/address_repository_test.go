@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/celsolenonsander/visionflow-api/internal/models"
+	"github.com/celsolenonsander/visionflow-api/internal/platform/apperrors"
 )
 
 func TestUpdateAddressPreservesIDAndListReturnsUpdatedAddress(t *testing.T) {
@@ -95,6 +96,27 @@ func TestUpdateAddressRejectsMissingAddress(t *testing.T) {
 	}
 }
 
+func TestUpdateAddressRejectsCustomerInIntegration(t *testing.T) {
+	tx := addressTestTx{
+		customer: addressTestCustomer{
+			id: 7, tenantID: 1, empresaID: 2, erp: "CLI-7", status: "em_integracao",
+		},
+		addresses: []addressTestAddress{{
+			id: 15, tenantID: 1, empresaID: 2, customerERP: "CLI-7", erp: "ERP-END-15",
+		}},
+	}
+
+	_, err := NewRepository().UpdateAddress(
+		context.Background(), &tx, 1, 2, 7, 15, validAddressInput(), "E",
+	)
+	if !errors.Is(err, apperrors.ErrIntegrationLocked) {
+		t.Fatalf("UpdateAddress() error = %v, want integration lock", err)
+	}
+	if tx.addresses[0].street != "" {
+		t.Fatalf("locked customer's address was modified: %#v", tx.addresses[0])
+	}
+}
+
 func TestUpdateAddressSwitchesPrimaryWithinCustomer(t *testing.T) {
 	tx := addressTestTx{
 		customer: addressTestCustomer{id: 7, tenantID: 1, empresaID: 2, erp: "CLI-7"},
@@ -137,6 +159,7 @@ type addressTestCustomer struct {
 	tenantID  int
 	empresaID int
 	erp       string
+	status    string
 }
 
 type addressTestAddress struct {
@@ -167,6 +190,9 @@ type addressTestTx struct {
 func (tx *addressTestTx) QueryRow(_ context.Context, query string, args ...any) pgx.Row {
 	if strings.Contains(query, "FROM cliente") && strings.Contains(query, "FOR UPDATE") &&
 		tx.customer.id == args[2] && tx.customer.tenantID == args[0] && tx.customer.empresaID == args[1] {
+		if strings.Contains(query, "situacao_app") {
+			return addressTestRow{values: []any{tx.customer.status}}
+		}
 		return addressTestRow{values: []any{tx.customer.erp}}
 	}
 	return addressTestRow{err: pgx.ErrNoRows}
@@ -178,7 +204,8 @@ func (tx *addressTestTx) Exec(_ context.Context, query string, args ...any) (pgc
 		for index := range tx.addresses {
 			address := &tx.addresses[index]
 			if address.id != args[13] || address.tenantID != args[11] ||
-				address.empresaID != args[12] || address.customerERP != args[14] {
+				address.empresaID != args[12] || tx.customer.id != args[14] ||
+				address.customerERP != tx.customer.erp {
 				continue
 			}
 			address.cep = args[0].(string)
@@ -198,7 +225,8 @@ func (tx *addressTestTx) Exec(_ context.Context, query string, args ...any) (pgc
 		for index := range tx.addresses {
 			address := &tx.addresses[index]
 			if address.tenantID == args[0] && address.empresaID == args[1] &&
-				address.customerERP == args[2] && address.id != args[3] {
+				tx.customer.id == args[2] && address.customerERP == tx.customer.erp &&
+				address.id != args[3] {
 				address.standard = false
 				affected++
 			}

@@ -68,6 +68,7 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/clientes/{id}/contas-receber", h.ContasReceberCliente)
 		r.Put("/clientes/{id}", h.AtualizarCliente)
 		r.Delete("/clientes/{id}", h.RemoverCliente)
+		r.Post("/clientes/{id}/finalizar", h.FinalizarClienteIntegracao)
 		r.Get("/clientes/{id}", h.Cliente)
 		r.Get("/cep/{cep}", h.ConsultarCEP)
 
@@ -77,6 +78,12 @@ func (h *Handler) Routes() http.Handler {
 		r.Post("/pedidos", h.SalvarPedidoAPI)
 		r.Put("/pedidos/{id}", h.AtualizarPedidoAPI)
 		r.Delete("/pedidos/{id}", h.RemoverPedido)
+		r.Post("/pedidos/{id}/finalizar", h.FinalizarPedidoIntegracao)
+		r.Post("/orcamentos/{id}/finalizar", h.FinalizarOrcamentoIntegracao)
+
+		// Integração ERP
+		r.Get("/integracao/{entidade}/pendentes", h.IntegracaoPendentes)
+		r.Post("/integracao/{entidade}/{id}/retorno", h.IntegracaoRetorno)
 
 		// Orçamentos
 		r.Get("/orcamentos", h.OrcamentosAPI)

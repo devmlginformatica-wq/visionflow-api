@@ -9,6 +9,7 @@ import (
 
 	"github.com/celsolenonsander/visionflow-api/internal/db"
 	"github.com/celsolenonsander/visionflow-api/internal/models"
+	"github.com/celsolenonsander/visionflow-api/internal/platform/apperrors"
 )
 
 type Repository struct{}
@@ -25,7 +26,8 @@ func NewRepository() *Repository {
 
 func (r *Repository) List(ctx context.Context, tx pgx.Tx, tenantID, empresaID int, search, status string, limit, cursor int) ([]map[string]any, error) {
 	const query = `
-		SELECT c.codigo AS id, c.codigo_erp, c.nome_razao_social, c.nome_fantasia, c.cnpj_cpf,
+		SELECT c.codigo AS id, c.codigo_erp, c.situacao_app AS status_integracao,
+		       c.motivo_rejeicao, c.nome_razao_social, c.nome_fantasia, c.cnpj_cpf,
 		       CASE c.tipo_pessoa WHEN 'F' THEN 'PF' WHEN 'J' THEN 'PJ' ELSE NULL END AS tipo_pessoa,
 		       c.cidade, c.estado, COALESCE(c.ativo, true) AS ativo,
 		       COALESCE(c.prospect, false) AS prospect,
@@ -65,7 +67,9 @@ func (r *Repository) List(ctx context.Context, tx pgx.Tx, tenantID, empresaID in
 		  SELECT p.codigo,p.data_emissao,p.situacao_app
 		  FROM pedido p
 		  WHERE p.cod_tenant=c.cod_tenant AND p.cod_empresa=c.cod_empresa
-		    AND p.codigo_erp_cliente=c.codigo_erp AND NOT COALESCE(p.e_um_orcamento,false)
+		    AND (p.cliente_id=c.codigo OR
+		         (p.cliente_id IS NULL AND p.codigo_erp_cliente=c.codigo_erp))
+		    AND NOT COALESCE(p.e_um_orcamento,false)
 		    AND NOT COALESCE(p.apagar_dados_pedido,false) AND p.situacao_app<>'cancelado'
 		  ORDER BY p.data_emissao DESC NULLS LAST,p.codigo DESC LIMIT 1
 		) last_order ON true
@@ -102,7 +106,8 @@ func (r *Repository) List(ctx context.Context, tx pgx.Tx, tenantID, empresaID in
 }
 
 const detailQuery = `
-	SELECT c.codigo AS id, c.codigo_erp, c.nome_razao_social, c.nome_fantasia, c.cnpj_cpf,
+	SELECT c.codigo AS id, c.codigo_erp, c.situacao_app AS status_integracao,
+	       c.motivo_rejeicao, c.nome_razao_social, c.nome_fantasia, c.cnpj_cpf,
 	       c.inscricao_estadual_rg,
 	       CASE c.tipo_pessoa WHEN 'F' THEN 'PF' WHEN 'J' THEN 'PJ' ELSE NULL END AS tipo_pessoa,
 	       COALESCE(c.prospect, false) AS prospect, COALESCE(c.ativo, true) AS ativo,
@@ -162,7 +167,9 @@ const detailQuery = `
 	LEFT JOIN LATERAL (
 	  SELECT p.codigo,p.data_emissao,p.situacao_app FROM pedido p
 	  WHERE p.cod_tenant=c.cod_tenant AND p.cod_empresa=c.cod_empresa
-	    AND p.codigo_erp_cliente=c.codigo_erp AND NOT COALESCE(p.e_um_orcamento,false)
+	    AND (p.cliente_id=c.codigo OR
+	         (p.cliente_id IS NULL AND p.codigo_erp_cliente=c.codigo_erp))
+	    AND NOT COALESCE(p.e_um_orcamento,false)
 	    AND NOT COALESCE(p.apagar_dados_pedido,false) AND p.situacao_app<>'cancelado'
 	  ORDER BY p.data_emissao DESC NULLS LAST,p.codigo DESC LIMIT 1
 	) last_order ON true
@@ -199,7 +206,9 @@ func (r *Repository) ListAddresses(ctx context.Context, tx pgx.Tx, tenantID, emp
 		       complemento_endereco, bairro, cidade, estado, ponto_referencia, restricoes_horarios
 		FROM cliente_endereco_adicional
 		WHERE cod_tenant=$1 AND cod_empresa=$2 AND deletado_em IS NULL
-		  AND codigo_erp_cliente = (SELECT codigo_erp FROM cliente WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3 AND deletado_em IS NULL)
+		  AND (cliente_id=$3 OR (cliente_id IS NULL AND codigo_erp_cliente=(
+		    SELECT codigo_erp FROM cliente
+		    WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3 AND deletado_em IS NULL)))
 		ORDER BY endereco_padrao DESC, codigo ASC`, tenantID, empresaID, customerID)
 	if err != nil {
 		return nil, fmt.Errorf("listar endereços do cliente: %w", err)
@@ -316,7 +325,7 @@ func (r *Repository) Create(ctx context.Context, tx pgx.Tx, tenantID, empresaID 
 			NULLIF($16,''),NULLIF($17,''),$18,NULLIF($19,''),NULLIF($20,''),NULLIF($21,''),
 			NULLIF($22,''),NULLIF($23,''),NULLIF($24,''),NULLIF($25,''),NULLIF($26,''),
 			$27,$28,$29,$30,NULLIF($31,'')::date,$32
-		)`, tenantID, empresaID, id, fmt.Sprintf("API-%d", id), input.NomeRazaoSocial,
+		)`, tenantID, empresaID, id, nil, input.NomeRazaoSocial,
 		input.NomeFantasia, input.CNPJCPF, input.InscricaoEstadualRG, bancoTipoPessoa(input.TipoPessoa),
 		input.Prospect, input.Telefone1, input.Telefone2, input.Celular, input.NomeContatoComprador,
 		input.EmailContatoComprador, input.NomeContatoFaturamento, input.EmailContatoFaturamento,
@@ -343,7 +352,8 @@ func (r *Repository) Update(ctx context.Context, tx pgx.Tx, tenantID, empresaID,
 			codigo_erp_transportadora=$25,codigo_erp_condicao_pagamento=$26,
 			codigo_erp_forma_pagamento=$27,codigo_erp_tabela_preco=$28,
 			data_ultima_visita=NULLIF($29,'')::date,anotacao_usuario=$30
-		WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$31 AND deletado_em IS NULL`,
+		WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$31 AND deletado_em IS NULL
+		  AND situacao_app NOT IN ('em_integracao','integrado')`,
 		tenantID, empresaID, input.NomeRazaoSocial, input.NomeFantasia, input.CNPJCPF,
 		input.InscricaoEstadualRG, bancoTipoPessoa(input.TipoPessoa), input.Prospect,
 		input.Telefone1, input.Telefone2, input.Celular, input.NomeContatoComprador,
@@ -356,32 +366,53 @@ func (r *Repository) Update(ctx context.Context, tx pgx.Tx, tenantID, empresaID,
 		return nil, fmt.Errorf("atualizar cliente: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
+		var status string
+		statusErr := tx.QueryRow(ctx, `SELECT situacao_app FROM cliente
+			WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3 AND deletado_em IS NULL`,
+			tenantID, empresaID, id).Scan(&status)
+		if statusErr == nil && (status == "em_integracao" || status == "integrado") {
+			return nil, apperrors.ErrIntegrationLocked
+		}
+		if statusErr != nil && statusErr != pgx.ErrNoRows {
+			return nil, fmt.Errorf("consultar situação do cliente: %w", statusErr)
+		}
 		return nil, pgx.ErrNoRows
 	}
 	return r.Get(ctx, tx, tenantID, empresaID, id)
 }
 
 func (r *Repository) Deactivate(ctx context.Context, tx pgx.Tx, tenantID, empresaID, id int) error {
-	tag, err := tx.Exec(ctx, `UPDATE cliente SET deletado_em=now() WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3 AND deletado_em IS NULL`, tenantID, empresaID, id)
+	tag, err := tx.Exec(ctx, `UPDATE cliente SET deletado_em=now()
+		WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3 AND deletado_em IS NULL
+		  AND situacao_app NOT IN ('em_integracao','integrado')`, tenantID, empresaID, id)
 	if err != nil {
 		return fmt.Errorf("remover cliente: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
+		var status string
+		statusErr := tx.QueryRow(ctx, `SELECT situacao_app FROM cliente
+			WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3 AND deletado_em IS NULL`,
+			tenantID, empresaID, id).Scan(&status)
+		if statusErr == nil && (status == "em_integracao" || status == "integrado") {
+			return apperrors.ErrIntegrationLocked
+		}
+		if statusErr != nil && statusErr != pgx.ErrNoRows {
+			return fmt.Errorf("consultar situação do cliente: %w", statusErr)
+		}
 		return pgx.ErrNoRows
 	}
 	return nil
 }
 
 func (r *Repository) CreateAddress(ctx context.Context, tx pgx.Tx, tenantID, empresaID, customerID int, input models.EnderecoCreate, dbType string) (map[string]any, error) {
-	customerERP, err := r.lockCustomer(ctx, tx, tenantID, empresaID, customerID)
-	if err != nil {
+	if err := r.lockCustomer(ctx, tx, tenantID, empresaID, customerID); err != nil {
 		return nil, err
 	}
 	if input.EnderecoPadrao {
 		if _, err := tx.Exec(ctx, `
 			UPDATE cliente_endereco_adicional SET endereco_padrao=false
-			WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo_erp_cliente=$3
-			  AND deletado_em IS NULL`, tenantID, empresaID, customerERP); err != nil {
+			WHERE cod_tenant=$1 AND cod_empresa=$2 AND cliente_id=$3
+			  AND deletado_em IS NULL`, tenantID, empresaID, customerID); err != nil {
 			return nil, fmt.Errorf("limpar endereço padrão: %w", err)
 		}
 	}
@@ -389,24 +420,24 @@ func (r *Repository) CreateAddress(ctx context.Context, tx pgx.Tx, tenantID, emp
 	if err := tx.QueryRow(ctx, "SELECT nextval('public.cliente_endereco_adicional_codigo_seq')").Scan(&id); err != nil {
 		return nil, fmt.Errorf("gerar identificador de endereço: %w", err)
 	}
-	_, err = tx.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO cliente_endereco_adicional (
-			cod_tenant,cod_empresa,codigo,codigo_erp_cliente,codigo_erp_endereco,identificacao_endereco,
+			cod_tenant,cod_empresa,codigo,cliente_id,codigo_erp_cliente,codigo_erp_endereco,identificacao_endereco,
 			cep,logradouro,numero_endereco,complemento_endereco,bairro,cidade,estado,tipo_endereco,
 			endereco_padrao,ponto_referencia,restricoes_horarios
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,''),$11,$12,$13,$14,$15,NULLIF($16,''),NULLIF($17,''))`,
-		tenantID, empresaID, id, customerERP, fmt.Sprintf("API-%d", id), fmt.Sprintf("API-%d", id),
-		input.CEP, input.Logradouro, input.NumeroEndereco, input.ComplementoEndereco, input.Bairro,
-		input.Cidade, input.Estado, dbType, input.EnderecoPadrao, input.PontoReferencia, input.RestricoesHorarios)
-	if err != nil {
+		) VALUES ($1,$2,$3,$4,(SELECT codigo_erp FROM cliente
+			WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$4),NULL,NULL,
+			$5,$6,$7,NULLIF($8,''),$9,$10,$11,$12,$13,NULLIF($14,''),NULLIF($15,''))`,
+		tenantID, empresaID, id, customerID, input.CEP, input.Logradouro,
+		input.NumeroEndereco, input.ComplementoEndereco, input.Bairro,
+		input.Cidade, input.Estado, dbType, input.EnderecoPadrao, input.PontoReferencia, input.RestricoesHorarios); err != nil {
 		return nil, fmt.Errorf("criar endereço: %w", err)
 	}
 	return r.addressByID(ctx, tx, tenantID, empresaID, customerID, id)
 }
 
 func (r *Repository) UpdateAddress(ctx context.Context, tx pgx.Tx, tenantID, empresaID, customerID, addressID int, input models.EnderecoCreate, dbType string) (map[string]any, error) {
-	customerERP, err := r.lockCustomer(ctx, tx, tenantID, empresaID, customerID)
-	if err != nil {
+	if err := r.lockCustomer(ctx, tx, tenantID, empresaID, customerID); err != nil {
 		return nil, err
 	}
 
@@ -416,10 +447,13 @@ func (r *Repository) UpdateAddress(ctx context.Context, tx pgx.Tx, tenantID, emp
 		    bairro=$5, cidade=$6, estado=$7, tipo_endereco=$8, endereco_padrao=$9,
 		    ponto_referencia=NULLIF($10,''), restricoes_horarios=NULLIF($11,''), dt_alteracao=now()
 		WHERE cod_tenant=$12 AND cod_empresa=$13 AND codigo=$14
-		  AND codigo_erp_cliente=$15 AND deletado_em IS NULL`,
+		  AND (cliente_id=$15 OR (cliente_id IS NULL AND codigo_erp_cliente=(
+		    SELECT codigo_erp FROM cliente
+		    WHERE cod_tenant=$12 AND cod_empresa=$13 AND codigo=$15)))
+		  AND deletado_em IS NULL`,
 		input.CEP, input.Logradouro, input.NumeroEndereco, input.ComplementoEndereco,
 		input.Bairro, input.Cidade, input.Estado, dbType, input.EnderecoPadrao,
-		input.PontoReferencia, input.RestricoesHorarios, tenantID, empresaID, addressID, customerERP)
+		input.PontoReferencia, input.RestricoesHorarios, tenantID, empresaID, addressID, customerID)
 	if err != nil {
 		return nil, fmt.Errorf("atualizar endereço: %w", err)
 	}
@@ -430,8 +464,8 @@ func (r *Repository) UpdateAddress(ctx context.Context, tx pgx.Tx, tenantID, emp
 	if input.EnderecoPadrao {
 		if _, err := tx.Exec(ctx, `
 			UPDATE cliente_endereco_adicional SET endereco_padrao=false
-			WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo_erp_cliente=$3
-			  AND codigo<>$4 AND deletado_em IS NULL`, tenantID, empresaID, customerERP, addressID); err != nil {
+			WHERE cod_tenant=$1 AND cod_empresa=$2 AND cliente_id=$3
+			  AND codigo<>$4 AND deletado_em IS NULL`, tenantID, empresaID, customerID, addressID); err != nil {
 			return nil, fmt.Errorf("limpar endereços padrão: %w", err)
 		}
 	}
@@ -439,16 +473,19 @@ func (r *Repository) UpdateAddress(ctx context.Context, tx pgx.Tx, tenantID, emp
 	return r.addressByID(ctx, tx, tenantID, empresaID, customerID, addressID)
 }
 
-func (r *Repository) lockCustomer(ctx context.Context, tx pgx.Tx, tenantID, empresaID, customerID int) (string, error) {
-	var customerERP string
+func (r *Repository) lockCustomer(ctx context.Context, tx pgx.Tx, tenantID, empresaID, customerID int) error {
+	var status string
 	err := tx.QueryRow(ctx, `
-		SELECT codigo_erp FROM cliente
+		SELECT situacao_app FROM cliente
 		WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3 AND deletado_em IS NULL
-		FOR UPDATE`, tenantID, empresaID, customerID).Scan(&customerERP)
+		FOR UPDATE`, tenantID, empresaID, customerID).Scan(&status)
 	if err != nil {
-		return "", fmt.Errorf("consultar cliente para endereço: %w", err)
+		return fmt.Errorf("consultar cliente para endereço: %w", err)
 	}
-	return customerERP, nil
+	if status == "em_integracao" || status == "integrado" {
+		return apperrors.ErrIntegrationLocked
+	}
+	return nil
 }
 
 func (r *Repository) addressByID(ctx context.Context, tx pgx.Tx, tenantID, empresaID, customerID, addressID int) (map[string]any, error) {
@@ -462,8 +499,9 @@ func (r *Repository) addressByID(ctx context.Context, tx pgx.Tx, tenantID, empre
 		FROM cliente_endereco_adicional e
 		WHERE e.cod_tenant=$1 AND e.cod_empresa=$2 AND e.codigo=$3
 		  AND e.deletado_em IS NULL
-		  AND e.codigo_erp_cliente=(SELECT c.codigo_erp FROM cliente c
-		    WHERE c.cod_tenant=$1 AND c.cod_empresa=$2 AND c.codigo=$4 AND c.deletado_em IS NULL)`,
+		  AND (e.cliente_id=$4 OR (e.cliente_id IS NULL AND e.codigo_erp_cliente=(
+		    SELECT c.codigo_erp FROM cliente c
+		    WHERE c.cod_tenant=$1 AND c.cod_empresa=$2 AND c.codigo=$4 AND c.deletado_em IS NULL)))`,
 		tenantID, empresaID, addressID, customerID)
 	if err != nil {
 		return nil, fmt.Errorf("consultar endereço atualizado: %w", err)
@@ -479,11 +517,15 @@ func (r *Repository) addressByID(ctx context.Context, tx pgx.Tx, tenantID, empre
 }
 
 func (r *Repository) RemoveAddress(ctx context.Context, tx pgx.Tx, tenantID, empresaID, customerID, addressID int) error {
+	if err := r.lockCustomer(ctx, tx, tenantID, empresaID, customerID); err != nil {
+		return err
+	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE cliente_endereco_adicional SET deletado_em=now()
 		WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$3 AND deletado_em IS NULL
-		  AND codigo_erp_cliente=(SELECT codigo_erp FROM cliente
-		    WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$4 AND deletado_em IS NULL)`,
+		  AND (cliente_id=$4 OR (cliente_id IS NULL AND codigo_erp_cliente=(
+		    SELECT codigo_erp FROM cliente
+		    WHERE cod_tenant=$1 AND cod_empresa=$2 AND codigo=$4 AND deletado_em IS NULL)))`,
 		tenantID, empresaID, addressID, customerID)
 	if err != nil {
 		return fmt.Errorf("remover endereço: %w", err)

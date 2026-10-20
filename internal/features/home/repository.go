@@ -21,7 +21,8 @@ func (r *Repository) Indicators(ctx context.Context, tx pgx.Tx, tenantID, empres
 		SELECT
 		  COALESCE((SELECT SUM(pi.valor_total_produtos_liquido)
 		    FROM pedido p JOIN pedido_item pi ON pi.cod_tenant=p.cod_tenant
-		      AND pi.cod_empresa=p.cod_empresa AND pi.codigo_erp_pedido=p.codigo_erp
+		      AND pi.cod_empresa=p.cod_empresa
+		      AND (pi.pedido_id=p.codigo OR (pi.pedido_id IS NULL AND pi.codigo_erp_pedido=p.codigo_erp))
 		    WHERE p.cod_tenant=$1 AND p.cod_empresa=$2
 		      AND COALESCE(p.apagar_dados_pedido,false)=false AND p.e_um_orcamento=false
 		      AND p.situacao_app='aprovado'
@@ -29,7 +30,8 @@ func (r *Repository) Indicators(ctx context.Context, tx pgx.Tx, tenantID, empres
 		      AND p.data_emissao < (date_trunc('month',CURRENT_DATE)+interval '1 month')::date),0) AS vendas_mes,
 		  COALESCE((SELECT SUM(pi.valor_total_produtos_liquido)
 		    FROM pedido p JOIN pedido_item pi ON pi.cod_tenant=p.cod_tenant
-		      AND pi.cod_empresa=p.cod_empresa AND pi.codigo_erp_pedido=p.codigo_erp
+		      AND pi.cod_empresa=p.cod_empresa
+		      AND (pi.pedido_id=p.codigo OR (pi.pedido_id IS NULL AND pi.codigo_erp_pedido=p.codigo_erp))
 		    WHERE p.cod_tenant=$1 AND p.cod_empresa=$2
 		      AND COALESCE(p.apagar_dados_pedido,false)=false AND p.e_um_orcamento=false
 		      AND p.situacao_app='aprovado'
