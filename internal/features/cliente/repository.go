@@ -123,6 +123,7 @@ const detailQuery = `
 	            ELSE to_char(c.data_ultima_visita,'YYYY-MM-DD') END AS data_ultima_visita,
 	       CASE WHEN c.data_inclusao IS NULL THEN NULL ELSE
 	         to_char(c.data_inclusao::timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') END AS data_inclusao,
+	       to_char(c.dt_alteracao AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS updated_at,
 	       CASE WHEN NOT COALESCE(c.ativo,true) THEN 'inativo'
 	            WHEN (c.data_bloqueio IS NOT NULL AND c.data_bloqueio<=CURRENT_DATE)
 	              OR NULLIF(BTRIM(c.motivo_bloqueio),'') IS NOT NULL THEN 'bloqueado'

@@ -1714,6 +1714,10 @@ components:
                 - string
                 - 'null'
               format: date-time
+            updated_at:
+              type: string
+              format: date-time
+              description: Data e hora da última alteração em UTC, no formato ISO 8601.
             enderecos:
               type: array
               items:
@@ -2148,6 +2152,10 @@ components:
         - $ref: '#/components/schemas/Pedido'
         - type: object
           properties:
+            updated_at:
+              type: string
+              format: date-time
+              description: Data e hora da última alteração em UTC, no formato ISO 8601.
             codigo_erp: { type: string }
             numero_cliente: { type: string }
             cliente:

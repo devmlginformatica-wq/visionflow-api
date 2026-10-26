@@ -1996,6 +1996,10 @@ components:
                 - string
                 - 'null'
               format: date-time
+            updated_at:
+              type: string
+              format: date-time
+              description: Data e hora da última alteração em UTC, no formato ISO 8601.
             endereco_resumo:
               type: [string, 'null']
             endereco_completo:
@@ -2512,6 +2516,10 @@ components:
         - $ref: '#/components/schemas/Pedido'
         - type: object
           properties:
+            updated_at:
+              type: string
+              format: date-time
+              description: Data e hora da última alteração em UTC, no formato ISO 8601.
             codigo_erp: { type: [string, 'null'] }
             motivo_rejeicao: { type: [string, 'null'] }
             numero_cliente: { type: string }

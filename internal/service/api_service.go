@@ -221,6 +221,7 @@ func pedidoDetalhe(ctx context.Context, tx pgx.Tx, tenantID, empresaID, id int) 
 		         WHEN '11' THEN 'Orçamento Revisado' WHEN '12' THEN 'Orçamento Aprovado' ELSE NULL END AS status_erp_label,
 		       CASE WHEN p.data_emissao IS NULL THEN NULL ELSE
 		         to_char(p.data_emissao::timestamp AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') END AS data_emissao,
+		       to_char(p.dt_alteracao AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS updated_at,
 		       CASE WHEN p.data_entrega IS NULL THEN NULL ELSE
 		         to_char(p.data_entrega, 'YYYY-MM-DD') END AS data_entrega,
 		       c.codigo AS cliente_id,c.nome_razao_social AS cliente_nome,c.cnpj_cpf AS cliente_cnpj_cpf,
