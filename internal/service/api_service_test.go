@@ -201,3 +201,25 @@ func TestCalcularTotais(t *testing.T) {
 		t.Fatalf("quantidade_mix = %v, want 1", got)
 	}
 }
+
+func TestEffectivePedidoSalePrice(t *testing.T) {
+	tests := []struct {
+		name      string
+		requested float64
+		official  float64
+		want      float64
+	}{
+		{name: "caps request at effective catalog price", requested: 4.5, official: 4, want: 4},
+		{name: "preserves lower negotiated price", requested: 3.5, official: 4, want: 3.5},
+		{name: "preserves equal price", requested: 4, official: 4, want: 4},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := effectivePedidoSalePrice(test.requested, test.official); got != test.want {
+				t.Fatalf("effectivePedidoSalePrice(%v, %v) = %v, want %v",
+					test.requested, test.official, got, test.want)
+			}
+		})
+	}
+}

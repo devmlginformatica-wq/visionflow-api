@@ -893,10 +893,8 @@ func insertPedidoItems(ctx context.Context, tx pgx.Tx, tenantID, empresaID, pedi
 		if !officialPrice.Valid {
 			return InvalidInput(fmt.Sprintf("item %d: produto sem preço efetivo cadastrado", index+1))
 		}
-		if item.SalePrice > officialPrice.Float64 {
-			return InvalidInput(fmt.Sprintf("item %d: preço de venda excede o preço efetivo do catálogo", index+1))
-		}
 		item.OriginalPrice = officialPrice.Float64
+		item.SalePrice = effectivePedidoSalePrice(item.SalePrice, item.OriginalPrice)
 		total := item.QuantidadeInformada*item.SalePrice - item.ValorDescontoComercial
 		if total < 0 {
 			return InvalidInput(fmt.Sprintf("item %d: desconto excede o valor bruto", index+1))
@@ -927,6 +925,13 @@ func insertPedidoItems(ctx context.Context, tx pgx.Tx, tenantID, empresaID, pedi
 		}
 	}
 	return nil
+}
+
+func effectivePedidoSalePrice(requestedPrice, officialPrice float64) float64 {
+	if requestedPrice > officialPrice {
+		return officialPrice
+	}
+	return requestedPrice
 }
 
 func (s *Service) RemoverPedido(ctx context.Context, tenantID, empresaID, id int) error {
