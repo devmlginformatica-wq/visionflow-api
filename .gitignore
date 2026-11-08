@@ -37,6 +37,9 @@ db/backups/
 *.dump
 *.backup
 
+# Cache gerado do schema do banco (atualizado pela versão do Flyway)
+docs/db-schema/
+
 # ------------------------------------------------------------
 # Sistema operacional
 # ------------------------------------------------------------

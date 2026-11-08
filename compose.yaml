@@ -3,19 +3,71 @@ services:
     image: postgres:16
     restart: unless-stopped
     environment:
-      POSTGRES_DB: epare_forca_de_vendas
-      POSTGRES_USER: epare
+      POSTGRES_DB: ${DB_NAME:-epare_forca_de_vendas}
+      POSTGRES_USER: ${DB_USER:-epare}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?Defina DB_PASSWORD no arquivo .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U epare -d epare_forca_de_vendas"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\"",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  migrate:
+    image: redgate/flyway:13.7.0
+    command:
+      - -baselineOnMigrate=true
+      - -baselineVersion=0
+      - migrate
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/${DB_NAME:-epare_forca_de_vendas}
+      FLYWAY_USER: ${DB_USER:-epare}
+      FLYWAY_PASSWORD: ${DB_PASSWORD:?Defina DB_PASSWORD no arquivo .env}
+      FLYWAY_SCHEMAS: public
+      FLYWAY_TABLE: flyway_schema_history
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql
+      FLYWAY_POSTGRESQL_TRANSACTIONAL_LOCK: "false"
+    volumes:
+      - ./db/migrations:/flyway/sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER:-epare}
+      DB_PASSWORD: ${DB_PASSWORD:?Defina DB_PASSWORD no arquivo .env}
+      DB_NAME: ${DB_NAME:-epare_forca_de_vendas}
+      DB_SSLMODE: disable
+    ports:
+      - "${API_HOST_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   workspace:
     image: mcr.microsoft.com/devcontainers/go:1.25
+    profiles:
+      - dev
     volumes:
       - .:/workspaces/visionflow-api:cached
     command: sleep infinity
@@ -25,9 +77,9 @@ services:
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"
-      DB_USER: epare
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_NAME: epare_forca_de_vendas
+      DB_USER: ${DB_USER:-epare}
+      DB_PASSWORD: ${DB_PASSWORD:?Defina DB_PASSWORD no arquivo .env}
+      DB_NAME: ${DB_NAME:-epare_forca_de_vendas}
       DB_SSLMODE: disable
 
 volumes:

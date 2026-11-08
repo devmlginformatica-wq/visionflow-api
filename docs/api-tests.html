@@ -583,7 +583,6 @@
             state.running = true;
             state.results = [];
             state.startTime = Date.now();
-            state.token = null;
             state.clientId = null;
             state.enderecoId = null;
             state.pedidoId = null;
@@ -606,8 +605,12 @@
                 // ═══ HEALTH ═══
                 await testHealth();
 
-                // ═══ LOGIN ═══
-                await testLogin(email, password);
+                if (!state.token) {
+                    log('🔑 Nenhuma sessão ativa. Fazendo login...', 'info');
+                    await testLogin(email, password);
+                } else {
+                    log('🔑 Usando sessão existente (token já autenticado).', 'ok');
+                }
 
                 if (!state.token) {
                     log('❌ Login falhou. Abortando testes.', 'err');
@@ -646,6 +649,9 @@
 
                 // ═══ SHELL, HOME, NOTIFICAÇÕES ═══
                 await testShellHomeNotif();
+
+                // ═══ RELATÓRIOS COM IA ═══
+                await testRelatoriosIA();
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 addTest('Suite', 'Execução interrompida', 'RUN', '', false, 0, message);
@@ -1578,6 +1584,68 @@
             }
         }
 
+        // ═══ RELATÓRIOS COM IA ═══
+
+        async function testRelatoriosIA() {
+            log('📋 Testando relatórios com IA...', 'info');
+
+            try {
+                const path = '/relatorios/ia';
+                const { status, ok, data } = await api('POST', path, {
+                    pergunta: 'quais os 10 clientes com mais pedidos',
+                }, state.token);
+                const relatorio = data?.data;
+                let campoAusente = '';
+                if (!Array.isArray(relatorio?.colunas)) campoAusente = 'colunas';
+                else if (!Array.isArray(relatorio?.linhas)) campoAusente = 'linhas';
+                else if (typeof relatorio?.sql_gerado !== 'string' || !relatorio.sql_gerado.trim()) campoAusente = 'sql_gerado';
+                else if (typeof relatorio?.provedor_llm !== 'string') campoAusente = 'provedor_llm';
+                else if (typeof relatorio?.limite_aplicado !== 'number') campoAusente = 'limite_aplicado';
+
+                const passou = status >= 200 && status < 300 && !campoAusente;
+                let erro = '';
+                if (!passou) {
+                    if (status === 503) {
+                        erro = 'Feature de IA não configurada (verifique LLM_PROVIDER e DB_IA_* no .env da API).';
+                    } else if (status === 504) {
+                        erro = 'Timeout do LLM (aumente LLM_TIMEOUT_SECONDS ou verifique o provedor).';
+                    } else if (status >= 200 && status < 300 && campoAusente) {
+                        erro = `Resposta sem campo ${campoAusente}.`;
+                    } else {
+                        erro = data?.error?.message || `HTTP ${status}`;
+                    }
+                }
+                addTest('Relatórios IA', 'POST /relatorios/ia — sucesso', 'POST', path, passou, status, erro, data);
+                if (passou) {
+                    const sql = relatorio.sql_gerado.length > 120
+                        ? `${relatorio.sql_gerado.slice(0, 117)}...`
+                        : relatorio.sql_gerado;
+                    log(`   SQL: ${sql}`, 'dim');
+                    log(`   Provedor: ${relatorio.provedor_llm} | Limite: ${relatorio.limite_aplicado} | Linhas: ${relatorio.linhas.length}`, 'dim');
+                }
+            } catch (e) {
+                addTest('Relatórios IA', 'POST /relatorios/ia — sucesso', 'POST', '/relatorios/ia', false, 0, e.message);
+            }
+
+            try {
+                const path = '/relatorios/ia';
+                const { status, ok, data } = await api('POST', path, { pergunta: '' }, state.token);
+                const passou = !ok && status === 400;
+                addTest('Relatórios IA', 'POST /relatorios/ia — pergunta vazia', 'POST', path, passou, status, passou ? '' : data?.error?.message || `HTTP ${status}`, data);
+            } catch (e) {
+                addTest('Relatórios IA', 'POST /relatorios/ia — pergunta vazia', 'POST', '/relatorios/ia', false, 0, e.message);
+            }
+
+            try {
+                const path = '/relatorios/ia';
+                const { status, ok, data } = await api('POST', path, { pergunta: 'quais os clientes' });
+                const passou = status === 401;
+                addTest('Relatórios IA', 'POST /relatorios/ia — sem token', 'POST', path, passou, status, passou ? '' : data?.error?.message || `HTTP ${status}`, data);
+            } catch (e) {
+                addTest('Relatórios IA', 'POST /relatorios/ia — sem token', 'POST', '/relatorios/ia', false, 0, e.message);
+            }
+        }
+
         // ═══════════════════════════════════════════════════════════
         // RENDER
         // ═══════════════════════════════════════════════════════════
@@ -1681,6 +1749,7 @@
             if (err === 0) {
                 log('🎉 Todos os testes passaram!', 'ok');
             }
+            document.getElementById('summary').scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
 
         function clearResults() {

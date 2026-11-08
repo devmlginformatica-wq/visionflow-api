@@ -143,6 +143,25 @@ visionflow-api/
 
 ## Como executar
 
+### Executar com Docker
+
+Com Docker e Docker Compose instalados, copie o arquivo de ambiente e inicie a
+API e o PostgreSQL:
+
+```bash
+cp .env.example .env
+# Edite .env e defina DB_PASSWORD e JWT_SECRET.
+docker compose up --build
+```
+
+O Compose inicia o PostgreSQL, aplica as migrations do Flyway e só então
+inicia a API. A API fica disponível em `http://localhost:8080`; para parar os
+serviços, use `docker compose down`. Os dados do PostgreSQL permanecem no
+volume `postgres_data`.
+
+Se a porta `8080` já estiver ocupada, defina `API_HOST_PORT` no `.env` (por
+exemplo, `API_HOST_PORT=8081`) e acesse a API nessa porta.
+
 ### 1. Variáveis de ambiente
 
 ```bash
@@ -213,6 +232,15 @@ flyway -configFiles=./db/flyway.conf migrate
 ```bash
 go run ./cmd/api
 ```
+
+No boot, se `DB_IA_*` estiver configurado, a API consulta a versão da última
+migration Flyway aplicada com sucesso. Quando ela difere da versão em
+`docs/db-schema/.version` (ou o cache está ausente/incompleto), a API regenera
+automaticamente `docs/db-schema/`, com `_overview.md` e um arquivo `.md` por
+tabela, excluindo tabelas internas. A consulta e a extração têm timeout de 10
+segundos. O cache é ignorado pelo Git; garanta que o usuário da API tenha
+permissão de escrita no primeiro boot e quando uma nova migration for aplicada.
+As requisições de `/relatorios/ia` leem somente os arquivos locais.
 
 ### Preparar ambiente local para os testes E2E
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/celsolenonsander/visionflow-api/internal/config"
 	"github.com/celsolenonsander/visionflow-api/internal/db"
+	"github.com/celsolenonsander/visionflow-api/internal/features/relatorio"
 	"github.com/celsolenonsander/visionflow-api/internal/httpapi"
 	"github.com/celsolenonsander/visionflow-api/internal/logger"
 	"github.com/celsolenonsander/visionflow-api/internal/service"
@@ -55,10 +56,14 @@ func run() error {
 	logg.Printf("✓ conectado em %s:%s/%s",
 		cfg.DBHost, cfg.DBPort, cfg.DBName)
 
+	if err := relatorio.InitializeSchemaCache(ctx, pool, logg); err != nil {
+		logg.Printf("não foi possível preparar o cache de schema dos relatórios com IA: %v", err)
+	}
+
 	// 5. Service e Handler
 	//    Service e handlers compartilham o pool PostgreSQL.
-	svc := service.New(pool)
-	handler := httpapi.NewHandler(svc, pool, cfg.JWTSecret, cfg.CORSAllowedOrigins)
+	svc := service.New(pool, logg)
+	handler := httpapi.NewHandler(svc, pool, cfg.JWTSecret, cfg.CORSAllowedOrigins, logg)
 	handler.AppEnv = cfg.AppEnv
 	handler.SQLConsoleEnabled = cfg.SQLConsoleEnabled
 

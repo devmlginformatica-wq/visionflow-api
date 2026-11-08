@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.git
+.devcontainer
+db/backups
+logs
+node_modules
+tools
+*.log
+*.tar.gz
+api

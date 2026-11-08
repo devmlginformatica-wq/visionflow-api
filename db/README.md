@@ -26,9 +26,9 @@ O projeto usa **PostgreSQL 16** com:
 - **White label** — suporta revendedores com marca própria (`revendedor`)
 - **Flyway** — controle de versão do schema
 
-**Migrations no repositório:** V001 a V016. A V016 acrescenta campos complementares
-de cliente (`data_ultima_visita`, `anotacao_usuario`) e item de pedido (`codigo_cliente`)
-usados pelos contratos atuais. Consulte `flyway info` e valide o ambiente antes de
+**Migrations no repositório:** V001 a V019. A V019 cria o papel PostgreSQL
+`visionflow_ia` para consultas da feature de relatórios com IA, sem privilégios de
+superusuário nem `BYPASSRLS`. Consulte `flyway info` e valide o ambiente antes de
 aplicar migrations; não execute migrations em produção sem a janela de mudança aprovada.
 
 ---
@@ -55,13 +55,31 @@ db/
 │   ├── V013__soft_delete.sql
 │   ├── V014__fix_saajoao_seed_passwords.sql
 │   ├── V015__pedido_data_entrega.sql
-│   └── V016__api_editor_campos_complementares.sql
+│   ├── V016__api_editor_campos_complementares.sql
+│   ├── V017__indices_busca_textual.sql
+│   ├── V018__integracao_erp.sql
+│   └── V019__visionflow_ia_role.sql
 ├── seeds/                   # Dados de teste (não vão para produção)
 ├── scripts/                 # Automação
 │   ├── reset_db.sh
 │   └── backup.sh
 └── backups/                 # Backups gerados (no .gitignore)
 ```
+
+### Configurar a senha da role de relatórios com IA
+
+A V019 cria `visionflow_ia` sem senha para não gravar credenciais em migrations.
+Depois de aplicar a migration, conecte ao banco como administrador e defina a
+senha no prompt interativo do `psql`:
+
+```sql
+\password visionflow_ia
+```
+
+Configure a mesma senha localmente em `DB_IA_PASSWORD`. Não coloque a senha em
+migrations, no `.env.example` ou em commits. A role recebe `pg_read_all_data`,
+mas não tem `BYPASSRLS`; as políticas RLS continuam sendo aplicadas às tabelas
+protegidas.
 
 ---
 

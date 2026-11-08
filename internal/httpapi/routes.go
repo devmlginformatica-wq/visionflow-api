@@ -48,6 +48,7 @@ func (h *Handler) Routes() http.Handler {
 
 		// Home
 		r.Get("/home/indicadores", h.HomeIndicadores)
+		r.Post("/relatorios/ia", h.RelatorioIA)
 
 		// Shell
 		r.Get("/shell/empresa", h.ShellEmpresaAPI)

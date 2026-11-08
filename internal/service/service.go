@@ -11,6 +11,7 @@ import (
 	"github.com/celsolenonsander/visionflow-api/internal/features/cliente"
 	"github.com/celsolenonsander/visionflow-api/internal/features/home"
 	"github.com/celsolenonsander/visionflow-api/internal/features/notificacao"
+	"github.com/celsolenonsander/visionflow-api/internal/features/relatorio"
 	"github.com/celsolenonsander/visionflow-api/internal/features/shell"
 	"github.com/celsolenonsander/visionflow-api/internal/features/tarefa"
 	"github.com/celsolenonsander/visionflow-api/internal/models"
@@ -37,9 +38,14 @@ type Service struct {
 	tarefa       *tarefa.Service
 	home         *home.Service
 	shell        *shell.Service
+	relatorio    *relatorio.Service
 }
 
-func New(pool *db.Pool) *Service {
+func New(pool *db.Pool, loggers ...relatorio.ErrorLogger) *Service {
+	var reportLoggers []relatorio.ErrorLogger
+	if len(loggers) > 0 {
+		reportLoggers = append(reportLoggers, loggers[0])
+	}
 	return &Service{
 		pool:         pool,
 		auth:         auth.New(pool),
@@ -50,6 +56,7 @@ func New(pool *db.Pool) *Service {
 		tarefa:       tarefa.New(pool),
 		home:         home.New(pool),
 		shell:        shell.New(pool),
+		relatorio:    relatorio.New(pool, reportLoggers...),
 	}
 }
 
@@ -181,4 +188,8 @@ func (s *Service) IndicadoresAPI(ctx context.Context, tenantID, empresaID, userI
 
 func (s *Service) ShellEmpresaAPI(ctx context.Context, tenantID, empresaID, userID int) (map[string]any, error) {
 	return s.shell.Get(ctx, tenantID, empresaID, userID)
+}
+
+func (s *Service) RelatorioIA(ctx context.Context, tenantID, empresaID int, userID int, pergunta string) (relatorio.RelatorioResponse, error) {
+	return s.relatorio.Generate(ctx, tenantID, empresaID, pergunta)
 }

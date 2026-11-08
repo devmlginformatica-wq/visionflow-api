@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/mail"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/celsolenonsander/visionflow-api/internal/db"
+	"github.com/celsolenonsander/visionflow-api/internal/features/relatorio"
 	"github.com/celsolenonsander/visionflow-api/internal/models"
 	"github.com/celsolenonsander/visionflow-api/internal/service"
 )
@@ -28,15 +30,20 @@ type Handler struct {
 	AppEnv             string
 	SQLConsoleEnabled  bool
 	corsAllowedOrigins []string
+	logger             relatorio.ErrorLogger
 }
 
-func NewHandler(s *service.Service, pool *db.Pool, jwtSecret string, corsAllowedOrigins []string) *Handler {
-	return &Handler{
+func NewHandler(s *service.Service, pool *db.Pool, jwtSecret string, corsAllowedOrigins []string, loggers ...relatorio.ErrorLogger) *Handler {
+	handler := &Handler{
 		Service:            s,
 		Pool:               pool,
 		JWTSecret:          jwtSecret,
 		corsAllowedOrigins: corsAllowedOrigins,
 	}
+	if len(loggers) > 0 {
+		handler.logger = loggers[0]
+	}
+	return handler
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}, err *models.APIError) {
@@ -113,6 +120,75 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, nil, nil)
+}
+
+func (h *Handler) RelatorioIA(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			method, path := reportRequestDetails(r)
+			h.logReportFailure("panic ao processar relatório method=%s path=%s panic=%v stack:\n%s", method, path, recovered, debug.Stack())
+			bad(w, http.StatusInternalServerError, "ERRO_INTERNO", "Erro interno ao processar relatório.")
+		}
+	}()
+
+	_, _, _, ok := authenticatedIDs(r)
+	if !ok {
+		bad(w, http.StatusUnauthorized, "NAO_AUTENTICADO", "Contexto de autenticação inválido.")
+		return
+	}
+	var req struct {
+		Pergunta string `json:"pergunta"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Pergunta) == "" {
+		bad(w, http.StatusBadRequest, "REQUISICAO_INVALIDA", "pergunta é obrigatória.")
+		return
+	}
+	tenantID, empresaID, _, ok := authenticatedIDs(r)
+	if !ok {
+		bad(w, http.StatusUnauthorized, "NAO_AUTENTICADO", "Contexto de autenticação inválido.")
+		return
+	}
+	resp, err := h.Service.RelatorioIA(r.Context(), tenantID, empresaID, 0, req.Pergunta)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) || errors.Is(err, relatorio.ErrSQLRejected) ||
+			strings.Contains(err.Error(), "SQL gerado") || strings.Contains(err.Error(), "apenas SELECT") ||
+			strings.Contains(err.Error(), "função perigosa") || strings.Contains(err.Error(), "múltiplas instruções") {
+			bad(w, http.StatusBadRequest, "SQL_INVALIDO", err.Error())
+			return
+		}
+		if errors.Is(err, relatorio.ErrFeatureNotConfigured) || strings.Contains(err.Error(), "feature de IA não configurada") {
+			bad(w, http.StatusServiceUnavailable, "FEATURE_NAO_CONFIGURADA", "feature de IA não configurada")
+			return
+		}
+		if errors.Is(err, relatorio.ErrLLMTimeout) || strings.Contains(err.Error(), "tempo limite") {
+			bad(w, http.StatusGatewayTimeout, "TIMEOUT_IA", "Serviço de IA indisponível no momento")
+			return
+		}
+		if errors.Is(err, relatorio.ErrLLMUnavailable) || strings.Contains(err.Error(), "Serviço de IA indisponível") {
+			bad(w, http.StatusServiceUnavailable, "IA_INDISPONIVEL", "Serviço de IA indisponível no momento")
+			return
+		}
+		h.logReportFailure("falha inesperada ao gerar relatório method=%s path=%s err=%v", r.Method, r.URL.Path, err)
+		bad(w, http.StatusInternalServerError, "ERRO_INTERNO", "Não foi possível gerar o relatório.")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp, nil)
+}
+
+func (h *Handler) logReportFailure(format string, args ...interface{}) {
+	if h != nil && h.logger != nil {
+		h.logger.Printf(format, args...)
+	}
+}
+
+func reportRequestDetails(r *http.Request) (string, string) {
+	if r == nil || r.URL == nil {
+		return "", ""
+	}
+	return r.Method, r.URL.Path
 }
 
 // ─── CLIENTES ──────────────────────────────────────────────
