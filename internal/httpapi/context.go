@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"net/http"
 
+	"github.com/celsolenonsander/visionflow-api/internal/authcontext"
 	"github.com/celsolenonsander/visionflow-api/internal/db"
 )
 
@@ -16,6 +18,11 @@ const (
 
 // WithUserContext injeta os IDs resolvidos pelo middleware no contexto.
 func WithUserContext(ctx context.Context, userID, tenantID, empresaID int) context.Context {
+	return WithAuthenticatedUserContext(ctx, userID, tenantID, empresaID, authcontext.Profile(ctx))
+}
+
+func WithAuthenticatedUserContext(ctx context.Context, userID, tenantID, empresaID int, profile string) context.Context {
+	ctx = authcontext.WithIdentity(ctx, userID, profile)
 	ctx = context.WithValue(ctx, ctxKeyUserID, userID)
 	ctx = context.WithValue(ctx, ctxKeyTenantID, tenantID)
 	ctx = context.WithValue(ctx, ctxKeyEmpresaID, empresaID)
@@ -40,9 +47,17 @@ func EmpresaID(ctx context.Context) (int, bool) {
 	return v, ok
 }
 
+func Perfil(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	return authcontext.Profile(r.Context())
+}
+
 // Session abre uma sessão de banco com o tenant/empresa do contexto.
 func (h *Handler) Session(ctx context.Context) (*db.Session, error) {
 	tenantID, _ := TenantID(ctx)
 	empresaID, _ := EmpresaID(ctx)
-	return db.NewSession(ctx, h.Pool, tenantID, empresaID)
+	userID, _ := UserID(ctx)
+	return db.NewSession(ctx, h.Pool, tenantID, empresaID, userID)
 }

@@ -43,6 +43,7 @@ func (l *promptCapturingLLM) Call(context.Context, string, ...llms.CallOption) (
 
 type fakeExecutor struct {
 	called  bool
+	userID  int
 	sql     string
 	columns []string
 	rows    [][]any
@@ -53,8 +54,9 @@ func testSchema(context.Context, string) (string, error) {
 	return "### cliente\n- codigo_erp: varchar\n- nome_razao_social: varchar", nil
 }
 
-func (f *fakeExecutor) Execute(_ context.Context, _, _ int, sql string) ([]string, [][]any, error) {
+func (f *fakeExecutor) Execute(_ context.Context, _, _, userID int, sql string) ([]string, [][]any, error) {
 	f.called = true
+	f.userID = userID
 	f.sql = sql
 	return f.columns, f.rows, f.err
 }
@@ -82,12 +84,15 @@ func TestServiceGenerateSuccess(t *testing.T) {
 		testSchema,
 	)
 
-	got, err := service.Generate(context.Background(), 1, 2, "clientes com mais pedidos")
+	got, err := service.Generate(context.Background(), 1, 2, 42, "clientes com mais pedidos")
 	if err != nil {
 		t.Fatalf("Generate retornou erro: %v", err)
 	}
 	if !executor.called || executor.sql != "SELECT nome, total FROM cliente LIMIT 1000" {
 		t.Fatalf("SQL recebido pelo repository: called=%v sql=%q", executor.called, executor.sql)
+	}
+	if executor.userID != 42 {
+		t.Fatalf("userID recebido pelo repository = %d, want 42", executor.userID)
 	}
 	if got.Estatisticas.TotalRegistros != 2 || got.Estatisticas.ColunasNumericas["total"].Soma != 73 {
 		t.Fatalf("estatísticas não foram calculadas: %+v", got.Estatisticas)
@@ -104,7 +109,7 @@ func TestServiceSendsSQLInstructionsAsSystemPrompt(t *testing.T) {
 	model := &promptCapturingLLM{}
 	service := NewWithDependencies(model, "fake", &fakeExecutor{}, 1000, time.Second, nil, testSchema)
 
-	if _, err := service.Generate(context.Background(), 1, 2, "clientes ativos"); err != nil {
+	if _, err := service.Generate(context.Background(), 1, 2, 0, "clientes ativos"); err != nil {
 		t.Fatalf("Generate retornou erro: %v", err)
 	}
 	if len(model.messages) != 2 {
@@ -119,6 +124,9 @@ func TestServiceSendsSQLInstructionsAsSystemPrompt(t *testing.T) {
 	}
 	for _, instruction := range []string{
 		"Use APENAS as tabelas e colunas listadas no schema abaixo",
+		"NUNCA retorne colunas de controle",
+		"Para perguntas sobre faturamento",
+		"O banco já filtra os dados por perfil (RLS). Não adicione WHERE de segurança.",
 		"Gere apenas uma única instrução SELECT. Não use múltiplos comandos separados por ponto e vírgula (;).",
 		"Não inclua explicações, markdown ou blocos de código na resposta.",
 		"Retorne apenas a string SQL pura.",
@@ -156,7 +164,7 @@ func TestServiceRejectsInvalidSQLBeforeRepository(t *testing.T) {
 		testSchema,
 	)
 
-	_, err := service.Generate(context.Background(), 1, 2, "apague clientes")
+	_, err := service.Generate(context.Background(), 1, 2, 0, "apague clientes")
 	if !errors.Is(err, ErrSQLRejected) {
 		t.Fatalf("esperava ErrSQLRejected, recebeu %v", err)
 	}
@@ -180,7 +188,7 @@ func TestServiceLLMTimeout(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 
-	_, err := service.Generate(ctx, 1, 2, "clientes")
+	_, err := service.Generate(ctx, 1, 2, 0, "clientes")
 	if !errors.Is(err, ErrLLMTimeout) {
 		t.Fatalf("esperava timeout do LLM, recebeu %v", err)
 	}
@@ -205,7 +213,7 @@ func TestServiceLimitCanBeDisabled(t *testing.T) {
 		testSchema,
 	)
 
-	got, err := service.Generate(context.Background(), 1, 2, "clientes")
+	got, err := service.Generate(context.Background(), 1, 2, 0, "clientes")
 	if err != nil {
 		t.Fatalf("Generate retornou erro: %v", err)
 	}
@@ -228,7 +236,7 @@ func TestServiceLogsSQLExecutionFailure(t *testing.T) {
 		testSchema,
 	)
 
-	_, err := service.Generate(context.Background(), 1, 2, "clientes")
+	_, err := service.Generate(context.Background(), 1, 2, 0, "clientes")
 	if !errors.Is(err, repositoryErr) {
 		t.Fatalf("esperava erro original do repository, recebeu %v", err)
 	}
@@ -251,7 +259,7 @@ func TestServiceLogsRejectedSQL(t *testing.T) {
 		testSchema,
 	)
 
-	_, err := service.Generate(context.Background(), 1, 2, "aguarde")
+	_, err := service.Generate(context.Background(), 1, 2, 0, "aguarde")
 	if !errors.Is(err, ErrSQLRejected) {
 		t.Fatalf("esperava SQL rejeitado, recebeu %v", err)
 	}
@@ -275,7 +283,7 @@ func TestServiceSchemaReadDoesNotUseExtractionTimeout(t *testing.T) {
 	}
 	service := NewWithDependencies(model, "fake", &fakeExecutor{}, 1000, 30*time.Second, nil, schema)
 
-	if _, err := service.Generate(context.Background(), 1, 2, "clientes ativos"); err != nil {
+	if _, err := service.Generate(context.Background(), 1, 2, 0, "clientes ativos"); err != nil {
 		t.Fatalf("Generate retornou erro: %v", err)
 	}
 }
@@ -297,7 +305,7 @@ func TestServiceStopsWhenSchemaExtractionFails(t *testing.T) {
 		},
 	)
 
-	_, err := service.Generate(context.Background(), 1, 2, "clientes ativos")
+	_, err := service.Generate(context.Background(), 1, 2, 0, "clientes ativos")
 	if !errors.Is(err, ErrSchemaUnavailable) || !errors.Is(err, extractionErr) {
 		t.Fatalf("esperava erro de schema preservando a causa original, recebeu %v", err)
 	}
@@ -321,7 +329,7 @@ func TestServiceClassifiesEmptyLLMResponseAsUnavailable(t *testing.T) {
 		testSchema,
 	)
 
-	_, err := service.Generate(context.Background(), 1, 2, "clientes ativos")
+	_, err := service.Generate(context.Background(), 1, 2, 0, "clientes ativos")
 	if !errors.Is(err, ErrLLMUnavailable) || !strings.Contains(err.Error(), "resposta vazia do provedor de IA") {
 		t.Fatalf("esperava falha de LLM preservando a causa original, recebeu %v", err)
 	}

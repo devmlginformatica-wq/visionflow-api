@@ -23,7 +23,7 @@ func NewRepository(pool *db.Pool) *Repository {
 
 func (r *Repository) Authenticate(ctx context.Context, email, password string) (models.Usuario, error) {
 	const query = `
-		SELECT u.cod_usuario, u.nome, u.email
+		SELECT u.cod_usuario, u.nome, u.email, u.tipo
 		FROM usuario u
 		JOIN usuario_empresa ue ON ue.cod_usuario=u.cod_usuario
 		JOIN empresa e ON e.cod_tenant=ue.cod_tenant AND e.cod_empresa=ue.cod_empresa
@@ -36,7 +36,7 @@ func (r *Repository) Authenticate(ctx context.Context, email, password string) (
 		LIMIT 1`
 
 	var user models.Usuario
-	err := r.db.QueryRow(ctx, query, email, password).Scan(&user.ID, &user.Nome, &user.Email)
+	err := r.db.QueryRow(ctx, query, email, password).Scan(&user.ID, &user.Nome, &user.Email, &user.Tipo)
 	if err != nil {
 		return models.Usuario{}, err
 	}

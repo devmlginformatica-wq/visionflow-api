@@ -191,5 +191,5 @@ func (s *Service) ShellEmpresaAPI(ctx context.Context, tenantID, empresaID, user
 }
 
 func (s *Service) RelatorioIA(ctx context.Context, tenantID, empresaID int, userID int, pergunta string) (relatorio.RelatorioResponse, error) {
-	return s.relatorio.Generate(ctx, tenantID, empresaID, pergunta)
+	return s.relatorio.Generate(ctx, tenantID, empresaID, userID, pergunta)
 }

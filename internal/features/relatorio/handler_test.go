@@ -16,13 +16,13 @@ type stubReportService struct {
 	err      error
 }
 
-func (s stubReportService) Generate(context.Context, int, int, string) (RelatorioResponse, error) {
+func (s stubReportService) Generate(context.Context, int, int, int, string) (RelatorioResponse, error) {
 	return s.response, s.err
 }
 
 type panickingReportService struct{}
 
-func (panickingReportService) Generate(context.Context, int, int, string) (RelatorioResponse, error) {
+func (panickingReportService) Generate(context.Context, int, int, int, string) (RelatorioResponse, error) {
 	panic("unexpected failure")
 }
 

@@ -11,15 +11,18 @@ import (
 )
 
 func TestAuthenticateUsesParameterizedCredentials(t *testing.T) {
-	querier := &fakeRowQuerier{row: fakeRow{values: []any{42, "Vendedor", "user@example.test"}}}
+	querier := &fakeRowQuerier{row: fakeRow{values: []any{42, "Vendedor", "user@example.test", "vendedor"}}}
 	repository := Repository{db: querier}
 
 	got, err := repository.Authenticate(context.Background(), "user@example.test", "not-a-real-password")
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
-	if want := (models.Usuario{ID: 42, Nome: "Vendedor", Email: "user@example.test"}); got != want {
+	if want := (models.Usuario{ID: 42, Nome: "Vendedor", Email: "user@example.test", Tipo: "vendedor"}); got != want {
 		t.Fatalf("Authenticate() = %#v, want %#v", got, want)
+	}
+	if !strings.Contains(querier.query, "u.tipo") {
+		t.Fatalf("query does not load user profile: %s", querier.query)
 	}
 	if !strings.Contains(querier.query, "crypt($2,u.senha_hash)=u.senha_hash") {
 		t.Fatalf("query does not verify password hash: %s", querier.query)

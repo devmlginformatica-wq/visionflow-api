@@ -42,7 +42,13 @@ func (h *Handler) Auth(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx := WithUserContext(r.Context(), userID, tenantID, empresaID)
+		profile, err := extractProfile(claims)
+		if err != nil {
+			unauthorized(w, "TOKEN_INVALIDO", "Token sem perfil válido.")
+			return
+		}
+
+		ctx := WithAuthenticatedUserContext(r.Context(), userID, tenantID, empresaID, profile)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -121,6 +127,19 @@ func extractUserID(claims jwt.MapClaims) (int, error) {
 		return id, nil
 	default:
 		return 0, jwt.ErrTokenInvalidClaims
+	}
+}
+
+func extractProfile(claims jwt.MapClaims) (string, error) {
+	profile, ok := claims["perfil"].(string)
+	if !ok {
+		return "", jwt.ErrTokenInvalidClaims
+	}
+	switch profile {
+	case "admin", "gerente", "vendedor", "supervisor":
+		return profile, nil
+	default:
+		return "", jwt.ErrTokenInvalidClaims
 	}
 }
 

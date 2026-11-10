@@ -62,9 +62,10 @@ func TestParseToken(t *testing.T) {
 	handler := &Handler{JWTSecret: secret}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": 42,
-		"iat": time.Now().Unix(),
-		"exp": time.Now().Add(time.Hour).Unix(),
+		"sub":    42,
+		"perfil": "vendedor",
+		"iat":    time.Now().Unix(),
+		"exp":    time.Now().Add(time.Hour).Unix(),
 	})
 	signed, err := token.SignedString([]byte(secret))
 	if err != nil {
@@ -78,6 +79,12 @@ func TestParseToken(t *testing.T) {
 	if got := claims["sub"]; got != float64(42) {
 		t.Fatalf("sub = %v, want 42", got)
 	}
+	if got := claims["perfil"]; got != "vendedor" {
+		t.Fatalf("perfil = %v, want vendedor", got)
+	}
+	if got, err := extractProfile(claims); err != nil || got != "vendedor" {
+		t.Fatalf("extractProfile() = %q, %v; want vendedor, nil", got, err)
+	}
 
 	wrongMethod := jwt.NewWithClaims(jwt.SigningMethodHS384, jwt.MapClaims{
 		"sub": 42,
@@ -89,6 +96,37 @@ func TestParseToken(t *testing.T) {
 	}
 	if _, err := handler.parseToken(wrongSigned); err == nil {
 		t.Fatal("parseToken() accepted a non-HS256 token")
+	}
+}
+
+func TestExtractProfile(t *testing.T) {
+	for _, profile := range []string{"admin", "gerente", "vendedor", "supervisor"} {
+		got, err := extractProfile(jwt.MapClaims{"perfil": profile})
+		if err != nil || got != profile {
+			t.Errorf("extractProfile(%q) = %q, %v; want same profile and nil error", profile, got, err)
+		}
+	}
+
+	for _, claims := range []jwt.MapClaims{
+		{},
+		{"perfil": "unknown"},
+		{"perfil": 42},
+	} {
+		if _, err := extractProfile(claims); err == nil {
+			t.Errorf("extractProfile(%v) accepted an invalid profile", claims)
+		}
+	}
+}
+
+func TestAuthenticatedUserContextStoresProfile(t *testing.T) {
+	ctx := WithAuthenticatedUserContext(t.Context(), 42, 3, 5, "gerente")
+	request := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+
+	if got := Perfil(request); got != "gerente" {
+		t.Fatalf("Perfil(request) = %q, want gerente", got)
+	}
+	if got, ok := UserID(request.Context()); !ok || got != 42 {
+		t.Fatalf("UserID(context) = %d, %t; want 42, true", got, ok)
 	}
 }
 

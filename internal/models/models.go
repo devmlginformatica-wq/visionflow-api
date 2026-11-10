@@ -20,6 +20,7 @@ type Usuario struct {
 	ID    int    `json:"id"`
 	Nome  string `json:"nome"`
 	Email string `json:"email"`
+	Tipo  string `json:"-"`
 	Token string `json:"token"`
 }
 

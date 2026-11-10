@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/celsolenonsander/visionflow-api/internal/authcontext"
 	"github.com/celsolenonsander/visionflow-api/internal/db"
 	"github.com/celsolenonsander/visionflow-api/internal/models"
 	"github.com/celsolenonsander/visionflow-api/internal/platform/apperrors"
@@ -91,7 +92,7 @@ func (s *Service) Delete(ctx context.Context, tenantID, empresaID, userID, id in
 }
 
 func (s *Service) withSession(ctx context.Context, tenantID, empresaID int, fn func(pgx.Tx) error) error {
-	session, err := db.NewSession(ctx, s.pool, tenantID, empresaID)
+	session, err := db.NewSession(ctx, s.pool, tenantID, empresaID, authcontext.UserID(ctx))
 	if err != nil {
 		return err
 	}

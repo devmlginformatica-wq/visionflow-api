@@ -9,11 +9,12 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/celsolenonsander/visionflow-api/internal/authcontext"
 	"github.com/celsolenonsander/visionflow-api/internal/models"
 )
 
 type reportService interface {
-	Generate(context.Context, int, int, string) (RelatorioResponse, error)
+	Generate(context.Context, int, int, int, string) (RelatorioResponse, error)
 }
 
 type Handler struct {
@@ -65,7 +66,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeHandlerError(w, http.StatusBadRequest, "REQUISICAO_INVALIDA", "pergunta é obrigatória")
 		return
 	}
-	resp, err := h.service.Generate(r.Context(), 0, 0, req.Pergunta)
+	resp, err := h.service.Generate(r.Context(), 0, 0, authcontext.UserID(r.Context()), req.Pergunta)
 	if err != nil {
 		if errors.Is(err, ErrSQLRejected) {
 			writeHandlerError(w, http.StatusBadRequest, "SQL_INVALIDO", err.Error())

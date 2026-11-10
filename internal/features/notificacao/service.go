@@ -16,7 +16,7 @@ func New(pool *db.Pool) *Service {
 }
 
 func (s *Service) List(ctx context.Context, tenantID, empresaID, userID, limit, cursor int, read *bool) ([]map[string]any, string, error) {
-	session, err := db.NewSession(ctx, s.pool, tenantID, empresaID)
+	session, err := db.NewSession(ctx, s.pool, tenantID, empresaID, userID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -34,7 +34,7 @@ func (s *Service) List(ctx context.Context, tenantID, empresaID, userID, limit, 
 }
 
 func (s *Service) CountUnread(ctx context.Context, tenantID, empresaID, userID int) (int, error) {
-	session, err := db.NewSession(ctx, s.pool, tenantID, empresaID)
+	session, err := db.NewSession(ctx, s.pool, tenantID, empresaID, userID)
 	if err != nil {
 		return 0, err
 	}

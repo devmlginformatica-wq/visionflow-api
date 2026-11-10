@@ -7,14 +7,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Session representa uma transação de banco com contexto de tenant/empresa
-// já injetado via SET LOCAL app.cod_tenant / app.cod_empresa.
+// Session representa uma transação de banco com contexto de tenant/empresa/
+// usuário já injetado via SET LOCAL.
 //
 // O RLS filtra automaticamente todas as queries executadas nessa transação.
 //
 // Padrão de uso:
 //
-//	sess, err := db.NewSession(ctx, pool, tenantID, empresaID)
+//	sess, err := db.NewSession(ctx, pool, tenantID, empresaID, userID)
 //	if err != nil { ... }
 //	defer sess.Rollback(ctx) // no-op se Commit já foi chamado
 //
@@ -28,7 +28,7 @@ type Session struct {
 }
 
 // NewSession abre uma transação e injeta o contexto de RLS.
-func NewSession(ctx context.Context, pool *Pool, tenantID, empresaID int) (*Session, error) {
+func NewSession(ctx context.Context, pool *Pool, tenantID, empresaID, userID int) (*Session, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("iniciar transação: %w", err)
@@ -50,6 +50,18 @@ func NewSession(ctx context.Context, pool *Pool, tenantID, empresaID int) (*Sess
 	); err != nil {
 		_ = tx.Rollback(ctx)
 		return nil, fmt.Errorf("set app.cod_empresa: %w", err)
+	}
+
+	userIDSetting := ""
+	if userID > 0 {
+		userIDSetting = fmt.Sprintf("%d", userID)
+	}
+	if _, err := tx.Exec(ctx,
+		"SELECT set_config('app.cod_usuario', $1, true)",
+		userIDSetting,
+	); err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, fmt.Errorf("set app.cod_usuario: %w", err)
 	}
 
 	return &Session{

@@ -171,6 +171,9 @@ func schemaTablesForQuestion(question string) []string {
 	if matches("pedido", "venda", "orçamento", "orcamento") {
 		add("cliente", "pedido", "pedido_item", "item")
 	}
+	if matches("pagamento", "faturamento") {
+		add("cliente", "pedido", "pedido_item", "item")
+	}
 	if matches("produto", "produtos", "item", "itens", "estoque", "preço", "preco") {
 		add("item", "item_estoque", "tabela_preco_item", "categoria_item", "fabricante", "unidade_medida")
 	}

@@ -48,11 +48,11 @@ func buildIAConnectionURL(cfg DBIAConfig) string {
 	return connectionURL.String()
 }
 
-func (r *repository) Execute(ctx context.Context, tenantID, empresaID int, sql string) ([]string, [][]any, error) {
+func (r *repository) Execute(ctx context.Context, tenantID, empresaID, userID int, sql string) ([]string, [][]any, error) {
 	if r == nil || r.pool == nil {
 		return nil, nil, fmt.Errorf("feature de IA não configurada")
 	}
-	session, err := db.NewSession(ctx, r.pool, tenantID, empresaID)
+	session, err := db.NewSession(ctx, r.pool, tenantID, empresaID, userID)
 	if err != nil {
 		return nil, nil, err
 	}

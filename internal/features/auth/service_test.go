@@ -18,7 +18,7 @@ func TestLoginMapsMissingUserToInvalidCredentials(t *testing.T) {
 }
 
 func TestLoginReturnsUser(t *testing.T) {
-	want := models.Usuario{ID: 42, Nome: "Vendedor", Email: "user@example.test"}
+	want := models.Usuario{ID: 42, Nome: "Vendedor", Email: "user@example.test", Tipo: "vendedor"}
 	service := Service{repository: fakeLoginRepository{user: want}}
 
 	got, err := service.Login(context.Background(), want.Email, "not-a-real-password")

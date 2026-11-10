@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/celsolenonsander/visionflow-api/internal/authcontext"
 	"github.com/celsolenonsander/visionflow-api/internal/db"
 	"github.com/celsolenonsander/visionflow-api/internal/models"
 	"github.com/celsolenonsander/visionflow-api/internal/platform/apperrors"
@@ -85,7 +86,7 @@ func pedidoAddressIDs(addressCodes [3]*string, addresses []pedidoAddress, tenant
 }
 
 func (s *Service) withSession(ctx context.Context, tenantID, empresaID int, fn func(pgx.Tx) error) error {
-	sess, err := db.NewSession(ctx, s.pool, tenantID, empresaID)
+	sess, err := db.NewSession(ctx, s.pool, tenantID, empresaID, authcontext.UserID(ctx))
 	if err != nil {
 		return err
 	}

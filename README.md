@@ -98,7 +98,7 @@ visionflow-api/
 ├── db/
 │   ├── flyway.conf.example         # Template de config do Flyway
 │   ├── README.md                   # Detalhes de banco
-│   ├── migrations/                 # Migrations versionadas (V001 → V013)
+│   ├── migrations/                 # Migrations versionadas (V001 → V021)
 │   │   ├── V001__nucleo_saas.sql
 │   │   ├── V002__cadastros_base.sql
 │   │   ├── V003__cadastros_operacionais.sql
@@ -111,7 +111,15 @@ visionflow-api/
 │   │   ├── V010__empresa_regional.sql
 │   │   ├── V011__pgcrypto_password_validation.sql
 │   │   ├── V012__fix_admin_password_hash.sql
-│   │   └── V013__soft_delete.sql
+│   │   ├── V013__soft_delete.sql
+│   │   ├── V014__fix_saajoao_seed_passwords.sql
+│   │   ├── V015__pedido_data_entrega.sql
+│   │   ├── V016__api_editor_campos_complementares.sql
+│   │   ├── V017__indices_busca_textual.sql
+│   │   ├── V018__integracao_erp.sql
+│   │   ├── V019__visionflow_ia_role.sql
+│   │   ├── V020__rls_equipe_vendas.sql
+│   │   └── V021__configuracoes_e_rls_dinamico.sql
 │   ├── seeds/
 │   │   └── demo_comercial/         # Dados de demonstração
 │   └── scripts/                    # Automação
@@ -302,6 +310,10 @@ Serviços disponíveis:
 - `GET  /notificacoes`
 - `GET  /notificacoes/nao-lidas/count`
 
+Não há endpoints `GET /configuracoes` ou `PUT /configuracoes/{chave}`
+implementados no momento. A tabela `configuracao` é usada pelo banco para
+resolver a visibilidade do RLS.
+
 ### Shell (UI)
 
 - `GET /shell/empresa`
@@ -390,8 +402,7 @@ Authorization: Bearer <token>
 
 O schema versionado segue o padrão multi-tenant e inclui tabelas operacionais,
 notificações, agenda e tarefas. Consulte `docs/schema.sql` e as migrations para
-a definição completa; a instalação validada no desenvolvimento usa as
-migrations V001–V013.
+a definição completa; as migrations do repositório vão de V001 a V021.
 
 | Grupo | Quantidade | Exemplos |
 |-------|-----------|----------|
@@ -409,10 +420,11 @@ migrations V001–V013.
 
 ### Migrations
 
-O repositório contém migrations versionadas de V001 a V013. A V013 adiciona
+O repositório contém migrations versionadas de V001 a V021. A V013 adiciona
 `deletado_em` em `cliente`, `cliente_endereco_adicional`, `agenda` e `tarefa`,
-com índices parciais para registros não removidos. No banco de desenvolvimento
-validado, V013 está aplicada.
+com índices parciais para registros não removidos. A V020 e a V021 adicionam
+RLS hierárquico por representante/perfil e configuração de visibilidade por
+empresa.
 
 ### Flyway
 
@@ -450,19 +462,31 @@ flyway -configFiles=./db/flyway.conf validate
 
 ### RLS (multi-tenant)
 
-Todas as tabelas operacionais têm **Row-Level Security**. A API injeta o
-contexto do tenant no início de cada transação:
+As policies combinam o isolamento por tenant/empresa com a autorização por
+perfil para `pedido` e `cliente`. A API injeta `app.cod_tenant`,
+`app.cod_empresa` e `app.cod_usuario` no início de cada transação. Admin e
+supervisor veem os representantes da empresa; gerente vê o próprio representante
+e sua equipe; vendedor vê o próprio representante, podendo incluir a equipe
+conforme a configuração `vendedor_ve_dados_equipe` da empresa na tabela
+`configuracao`. Ausência da flag equivale a `false`.
+
+Para as demais tabelas operacionais, aplica-se o escopo de tenant/empresa
+definido por suas policies. Exemplo do contexto básico:
 
 ```sql
 BEGIN;
 SET LOCAL app.cod_tenant = '2';
 SET LOCAL app.cod_empresa = '1';   -- opcional
-SELECT * FROM cliente;              -- só clientes do tenant 2
+SET LOCAL app.cod_usuario = '123'; -- ID do usuário autenticado, para RLS hierárquico
+SELECT * FROM cliente;              -- tenant/empresa e representantes permitidos
 COMMIT;
 ```
 
 **Regra de ouro:** sempre usar `SET LOCAL` (não `SET`) dentro de
-transação, para não vazar contexto entre conexões do pool.
+transação, para não vazar contexto entre conexões do pool. As funções de
+contexto e `fn_representantes_permitidos()` alimentam as policies sem que a
+role de aplicação `epare` precise de SELECT direto nas tabelas
+`usuario_representante` e `equipe_venda_gerente`.
 
 ### Backup
 

@@ -24,7 +24,7 @@ func (s *Service) ListWithPricing(ctx context.Context, tenantID, empresaID, user
 	if _, ok := queryFor(resource); !ok {
 		return nil, "", fmt.Errorf("catálogo desconhecido: %s", resource)
 	}
-	session, err := db.NewSession(ctx, s.pool, tenantID, empresaID)
+	session, err := db.NewSession(ctx, s.pool, tenantID, empresaID, userID)
 	if err != nil {
 		return nil, "", err
 	}

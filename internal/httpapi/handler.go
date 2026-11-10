@@ -103,9 +103,10 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": u.ID,
-		"iat": time.Now().Unix(),
-		"exp": time.Now().Add(8 * time.Hour).Unix(),
+		"sub":    u.ID,
+		"perfil": u.Tipo,
+		"iat":    time.Now().Unix(),
+		"exp":    time.Now().Add(8 * time.Hour).Unix(),
 	})
 
 	signed, err := token.SignedString([]byte(h.JWTSecret))
@@ -146,12 +147,12 @@ func (h *Handler) RelatorioIA(w http.ResponseWriter, r *http.Request) {
 		bad(w, http.StatusBadRequest, "REQUISICAO_INVALIDA", "pergunta é obrigatória.")
 		return
 	}
-	tenantID, empresaID, _, ok := authenticatedIDs(r)
+	tenantID, empresaID, userID, ok := authenticatedIDs(r)
 	if !ok {
 		bad(w, http.StatusUnauthorized, "NAO_AUTENTICADO", "Contexto de autenticação inválido.")
 		return
 	}
-	resp, err := h.Service.RelatorioIA(r.Context(), tenantID, empresaID, 0, req.Pergunta)
+	resp, err := h.Service.RelatorioIA(r.Context(), tenantID, empresaID, userID, req.Pergunta)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidInput) || errors.Is(err, relatorio.ErrSQLRejected) ||
 			strings.Contains(err.Error(), "SQL gerado") || strings.Contains(err.Error(), "apenas SELECT") ||

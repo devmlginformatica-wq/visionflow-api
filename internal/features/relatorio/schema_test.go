@@ -19,6 +19,30 @@ func TestSchemaTablesForQuestionSelectsRelevantTables(t *testing.T) {
 	}
 }
 
+func TestSchemaTablesForFinancialQuestionsIncludesOrders(t *testing.T) {
+	for _, question := range []string{
+		"faturamento do mês",
+		"vendas de hoje",
+		"pagamento dos pedidos",
+	} {
+		got := schemaTablesForQuestion(question)
+		for _, required := range []string{"pedido", "pedido_item"} {
+			if !containsString(got, required) {
+				t.Errorf("schemaTablesForQuestion(%q) = %v, precisa incluir %q", question, got, required)
+			}
+		}
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSchemaTablesForQuestionUsesCoreTablesForUnknownQuestion(t *testing.T) {
 	got := schemaTablesForQuestion("resumo comercial")
 	want := []string{"cliente", "item", "pedido", "pedido_item"}

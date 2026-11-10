@@ -21,6 +21,9 @@ var ErrSQLRejected = errors.New("SQL rejeitado")
 
 const promptSQL = `Você é um assistente que gera SQL PostgreSQL somente leitura.
 Use APENAS as tabelas e colunas listadas no schema abaixo para gerar a consulta SQL.
+NUNCA retorne colunas de controle (cod_tenant, cod_empresa, codigo, versao_layout, codigo_erp, cod_usuario) a menos que o usuário peça.
+Para perguntas sobre faturamento, priorize colunas 'valor', 'total', 'preco' e faça JOIN com pedido e pedido_item.
+O banco já filtra os dados por perfil (RLS). Não adicione WHERE de segurança.
 Gere apenas uma única instrução SELECT. Não use múltiplos comandos separados por ponto e vírgula (;).
 Não inclua explicações, markdown ou blocos de código na resposta.
 Retorne apenas a string SQL pura.
@@ -29,7 +32,7 @@ Não use comentários, funções perigosas ou comandos DML.`
 type schemaProvider func(context.Context, string) (string, error)
 
 type Executor interface {
-	Execute(context.Context, int, int, string) ([]string, [][]any, error)
+	Execute(context.Context, int, int, int, string) ([]string, [][]any, error)
 }
 
 type ErrorLogger interface {
@@ -92,7 +95,7 @@ func NewWithDependencies(model llms.Model, provider string, executor Executor, l
 	}
 }
 
-func (s *Service) Generate(ctx context.Context, tenantID, empresaID int, pergunta string) (RelatorioResponse, error) {
+func (s *Service) Generate(ctx context.Context, tenantID, empresaID, userID int, pergunta string) (RelatorioResponse, error) {
 	if s == nil || s.configErr != nil {
 		if s != nil && s.configErr != nil {
 			return RelatorioResponse{}, s.configErr
@@ -160,7 +163,7 @@ func (s *Service) Generate(ctx context.Context, tenantID, empresaID int, pergunt
 	}
 
 	start := time.Now()
-	cols, rows, err := s.repository.Execute(callCtx, tenantID, empresaID, finalSQL)
+	cols, rows, err := s.repository.Execute(callCtx, tenantID, empresaID, userID, finalSQL)
 	if err != nil {
 		if s.logger != nil {
 			s.logger.Printf("falha ao executar SQL err=%v sql=%q", err, finalSQL)

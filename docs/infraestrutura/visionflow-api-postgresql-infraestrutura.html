@@ -288,6 +288,7 @@
         <li><a href="#parte3-operacionais">Parte 3 — Cadastros Operacionais</a></li>
         <li><a href="#parte4-filhos">Parte 4 — Tabelas Filho</a></li>
         <li><a href="#parte5-rls">Parte 5 — Row-Level Security</a></li>
+        <li><a href="#rls-hierarquico">Evolução do RLS: Vendedores e Gerentes</a></li>
         <li><a href="#testes">Testes de Validação</a></li>
         <li><a href="#backup">Backup Automático</a></li>
         <li><a href="#troubleshooting">Troubleshooting</a></li>
@@ -779,12 +780,12 @@ sudo apt install -y postgresql-17 postgresql-contrib-17</code></pre>
       <section id="parte5-rls">
         <h2>11. Parte 5 — Row-Level Security (RLS)</h2>
 
-        <p>Esta é a parte <strong>mais importante</strong> para segurança multi-tenant. Vamos ativar RLS em <strong>56 tabelas</strong>.</p>
+        <p>Esta é a parte <strong>mais importante</strong> para segurança multi-tenant. A migration V005 ativou RLS em <strong>56 tabelas</strong>; as migrations V020/V021 ampliaram as policies de <code>pedido</code> e <code>cliente</code> com o escopo por representante descrito abaixo.</p>
 
         <h3>Como funciona</h3>
         <ol>
           <li>A API autentica o usuário e descobre o <code>cod_tenant</code></li>
-          <li>A API executa <code>SET LOCAL app.cod_tenant = '1';</code> no início da transação</li>
+          <li>A API define o contexto de tenant/empresa no início da transação e, para políticas hierárquicas, também o usuário autenticado</li>
           <li>A partir daí, <strong>toda</strong> query nas tabelas com RLS filtra automaticamente</li>
           <li>Mesmo se a API esquecer o <code>WHERE</code>, o banco filtra por ela</li>
         </ol>
@@ -814,10 +815,72 @@ COMMIT;</code></pre>
         <div class="callout warning">
           <strong>⚠️ Detalhes importantes</strong>
           <ul style="margin-top:6px">
-            <li>Superuser (<code>postgres</code>) <strong>ignora</strong> RLS — apenas o usuário da API (<code>epare</code>) respeita</li>
+            <li>Superusers e roles com <code>BYPASSRLS</code> ignoram RLS; <code>epare</code> e <code>visionflow_ia</code> não têm esse atributo e respeitam as policies</li>
             <li>Usamos <code>FORCE ROW LEVEL SECURITY</code> para que até o dono da tabela respeite o RLS</li>
             <li>Sempre use <code>SET LOCAL</code> (não <code>SET</code>) dentro de transação — assim o contexto não vaza entre conexões do pool</li>
           </ul>
+        </div>
+
+        <div id="rls-hierarquico" style="scroll-margin-top:20px">
+          <h3>Evolução do RLS: Vendedores e Gerentes</h3>
+          <p>As migrations V020 e V021 ampliam o isolamento. Além de <code>cod_tenant</code> e <code>cod_empresa</code>, as policies de <code>pedido</code> e <code>cliente</code> consideram o usuário autenticado, o perfil e os representantes ERP associados a ele.</p>
+
+          <h4>Hierarquia de acesso</h4>
+          <ul>
+            <li><strong>Admin e supervisor:</strong> podem consultar todos os representantes da empresa atual, sempre respeitando tenant e empresa da sessão.</li>
+            <li><strong>Gerente:</strong> pode consultar o próprio representante e os representantes associados à sua equipe em <code>equipe_venda_gerente</code>.</li>
+            <li><strong>Vendedor:</strong> por padrão, consulta somente o representante associado em <code>usuario_representante</code>. Quando a configuração da empresa está ativa, também consulta a equipe do gerente que contém o representante do vendedor.</li>
+          </ul>
+
+          <h4>Configuração por empresa</h4>
+          <p>A tabela <code>configuracao</code> armazena valores por tenant e empresa, usando <code>(cod_tenant, cod_empresa, chave)</code> como chave primária. A V021 cria a configuração <code>vendedor_ve_dados_equipe</code> com valor <code>false</code> para cada empresa existente no momento da migration. Somente o valor <code>true</code> habilita a extensão de visibilidade do vendedor; ausência da chave mantém o comportamento restrito ao próprio representante.</p>
+
+          <h4>Vínculos e funções SECURITY DEFINER</h4>
+          <p><code>usuario_representante</code> associa um usuário a um representante ERP por empresa. <code>equipe_venda_gerente</code> associa o usuário gerente aos representantes da equipe. A role da API <code>epare</code> não tem SELECT direto nessas tabelas: as funções <code>SECURITY DEFINER</code>, com <code>search_path</code> fixo e validações contra o usuário/tenant/empresa da sessão, resolvem os vínculos necessários. Assim, a API consegue aplicar o RLS sem consultar essas tabelas diretamente.</p>
+          <div class="callout warning">
+            <strong>⚠️ Escopo dos privilégios da role de IA</strong>
+            <code>visionflow_ia</code> é a proprietária das funções SECURITY DEFINER, mas não está limitada a executar somente essas funções: a V019 concede <code>pg_read_all_data</code> e as V020/V021 concedem SELECT em tabelas de vínculo e suporte. A role não tem <code>BYPASSRLS</code>, então as policies continuam aplicáveis. Revise esses grants se a intenção futura for restringir a role de IA ao acesso indireto pelas funções.
+          </div>
+
+          <h4>Fluxo do contexto até as policies</h4>
+          <pre><code>Requisição com JWT
+    │
+    ▼
+Middleware Go valida token e obtém sub (cod_usuario) + perfil
+    │
+    ▼
+Contexto HTTP: userID, tenantID, empresaID, perfil
+    │
+    ▼
+db.NewSession abre transação e define SET LOCAL:
+  app.cod_tenant / app.cod_empresa / app.cod_usuario
+    │
+    ▼
+fn_current_usuario() ──► usuario.tipo ──► fn_current_perfil()
+    │                                      │
+    └──► vínculos usuário/equipe + configuracao
+                         │
+                         ▼
+           fn_representantes_permitidos()
+                         │
+               ┌─────────┴─────────┐
+               ▼                   ▼
+     policy de pedido      policy de cliente
+     representante = ANY   cliente_representante
+                           contém representante permitido</code></pre>
+          <p>O contexto é local à transação. No fim do commit/rollback, os valores não são reaproveitados por outra conexão do pool. Admin/supervisor mantêm a abrangência da empresa; gerente e vendedor são filtrados pelo conjunto retornado por <code>fn_representantes_permitidos()</code>.</p>
+
+          <h4>O que cada policy verifica</h4>
+          <table>
+            <thead>
+              <tr><th>Tabela</th><th>Condição de visibilidade</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>pedido</code></td><td>O representante ERP do pedido pertence ao array de representantes permitidos, ou o perfil é admin/supervisor.</td></tr>
+              <tr><td><code>cliente</code></td><td>Existe vínculo em <code>cliente_representante</code> com um representante permitido, ou o perfil é admin/supervisor.</td></tr>
+            </tbody>
+          </table>
+          <p>Em ambas as tabelas, o escopo de tenant e empresa permanece obrigatório. As policies também usam a mesma regra em <code>WITH CHECK</code>, protegendo inserções e atualizações.</p>
         </div>
       </section>
 

@@ -22,14 +22,17 @@ Documentação técnica da estrutura de banco, migrations e boas práticas.
 O projeto usa **PostgreSQL 16** com:
 
 - **Multi-tenant** — isolamento por `cod_tenant` e `cod_empresa`
-- **Row-Level Security (RLS)** — filtragem automática de dados por tenant
+- **Row-Level Security (RLS)** — filtragem automática por tenant/empresa e,
+  em `pedido`/`cliente`, por perfil e representante
 - **White label** — suporta revendedores com marca própria (`revendedor`)
 - **Flyway** — controle de versão do schema
 
-**Migrations no repositório:** V001 a V019. A V019 cria o papel PostgreSQL
-`visionflow_ia` para consultas da feature de relatórios com IA, sem privilégios de
-superusuário nem `BYPASSRLS`. Consulte `flyway info` e valide o ambiente antes de
-aplicar migrations; não execute migrations em produção sem a janela de mudança aprovada.
+**Migrations no repositório:** V001 a V021. A V019 cria o papel PostgreSQL
+`visionflow_ia` para consultas da feature de relatórios com IA, sem privilégios
+de superusuário nem `BYPASSRLS`. As V020 e V021 adicionam RLS hierárquico,
+configuração por empresa e resolução de representantes. Consulte `flyway info`
+e valide o ambiente antes de aplicar migrations; não execute migrations em
+produção sem a janela de mudança aprovada.
 
 ---
 
@@ -58,8 +61,12 @@ db/
 │   ├── V016__api_editor_campos_complementares.sql
 │   ├── V017__indices_busca_textual.sql
 │   ├── V018__integracao_erp.sql
-│   └── V019__visionflow_ia_role.sql
+│   ├── V019__visionflow_ia_role.sql
+│   ├── V020__rls_equipe_vendas.sql
+│   └── V021__configuracoes_e_rls_dinamico.sql
 ├── seeds/                   # Dados de teste (não vão para produção)
+│   ├── demo_comercial/      # Distribuidora de bebidas
+│   └── demo_setores/        # Atacado, SaaS e saúde; consulte o README da pasta
 ├── scripts/                 # Automação
 │   ├── reset_db.sh
 │   └── backup.sh
@@ -80,6 +87,39 @@ Configure a mesma senha localmente em `DB_IA_PASSWORD`. Não coloque a senha em
 migrations, no `.env.example` ou em commits. A role recebe `pg_read_all_data`,
 mas não tem `BYPASSRLS`; as políticas RLS continuam sendo aplicadas às tabelas
 protegidas.
+
+### RLS hierárquico (V020 e V021)
+
+A V020 cria `usuario_representante` (usuário ↔ representante ERP por empresa)
+e `equipe_venda_gerente` (gerente ↔ representantes da equipe). Também instala
+as funções de contexto do usuário e substitui as policies de `pedido` e
+`cliente` para aplicar o filtro por representante. A API precisa definir
+`app.cod_usuario` junto com tenant e empresa, na mesma transação.
+
+A V021 cria `configuracao`, com chave por tenant/empresa, e semeia
+`vendedor_ve_dados_equipe=false` para as empresas existentes. Para gerente,
+`fn_representantes_permitidos()` combina seu representante próprio com sua
+equipe. Para vendedor, a configuração `true` permite também os representantes
+da equipe do gerente que contém seu representante; `false` ou configuração
+ausente mantém apenas o representante próprio. Admin/supervisor mantêm acesso
+aos representantes da empresa, respeitando o escopo de tenant/empresa.
+
+**Privilégios das roles:** `epare` não tem SELECT direto em
+`usuario_representante` ou `equipe_venda_gerente`; a resolução é feita pelas
+funções `SECURITY DEFINER`, com `search_path` fixo, cujo `EXECUTE` é concedido
+à role da API. Isso não significa que `visionflow_ia` tenha acesso somente às
+funções: a V019 concede `pg_read_all_data`, e as V020/V021 concedem SELECT
+explícito em tabelas de vínculo e suporte. `visionflow_ia` não tem
+`BYPASSRLS`, então o RLS continua ativo, mas a role tem privilégios de leitura
+direta que devem ser considerados ao revisar o modelo de acesso da IA.
+
+### Dados fictícios por setor
+
+O diretório [`seeds/demo_setores`](seeds/demo_setores/README.md) contém um seed
+idempotente para criar três tenants de demonstração — atacado/distribuição,
+SaaS e saúde — já com empresa, usuários, representantes, equipe hierárquica,
+configuração RLS, clientes, produtos e pedidos. Requer as migrations até V021
+e não deve ser usado em produção.
 
 ---
 
